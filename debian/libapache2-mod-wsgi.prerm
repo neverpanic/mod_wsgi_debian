@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "remove" -o "$1" = "purge" ]; then
+    a2dismod mod-wsgi || true
+fi
+
+exit 0
