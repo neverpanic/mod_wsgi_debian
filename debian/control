@@ -12,7 +12,10 @@ Package: libapache2-mod-wsgi
 Architecture: any
 Depends: apache2.2-common, ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}
 Description: Python WSGI adapter module for Apache
- The mod_wsgi adapter is an Apache module that provides a WSGI compliant
- interface for hosting Python based web applications within Apache. The
- adapter provides significantly better performance than using existing
- WSGI adapters for mod_python or CGI.
+ The mod_wsgi adapter is an Apache module that provides a WSGI (Web Server
+ Gateway Interface, a standard interface between web server software and
+ web applications written in Python) compliant interface for hosting Python
+ based web applications within Apache. The adapter provides significantly
+ better performance than using existing WSGI adapters for mod_python or CGI.
+ .
+  Homepage: http://code.google.com/p/modwsgi/
