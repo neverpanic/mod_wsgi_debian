@@ -3,11 +3,11 @@ Section: net
 Priority: extra
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
 Uploaders: Bernd Zeimetz <bernd@bzed.de>
-Build-Depends: debhelper (>= 5), autotools-dev
+Build-Depends: debhelper (>= 5), autotools-dev, python-dev, apache2-prefork-dev
 Standards-Version: 3.7.2
 
 Package: libapache2-mod-wsgi
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}
 Description: <insert up to 60 chars description>
  <insert long description, indented with spaces>

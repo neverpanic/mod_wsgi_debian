@@ -1,1 +1,2 @@
 makefile-destdir
+umask-fix
