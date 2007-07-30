@@ -6,11 +6,6 @@ PACKAGE=libapache2-mod-wsgi
 #export DH_VERBOSE=1
 
 
-# These are used for cross-compiling and for saving the configure script
-# from having to guess our platform (since we know it already)
-DEB_HOST_GNU_TYPE   ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
-DEB_BUILD_GNU_TYPE  ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
-
 # we need dpatch
 include /usr/share/dpatch/dpatch.make
 
@@ -18,22 +13,11 @@ APXS2=/usr/bin/apxs2
 PY_VERSION=$(shell dpkg -s python | grep ^Version | sed 's,Version: \([0-9]\.[0-9]\).*,\1,')
 PY_NEXT_VERSION=$(shell echo $(PY_VERSION) | awk '{ print (($$1*10)+1)/10 }')
 
-CFLAGS = -Wall -g
-
-ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
-	CFLAGS += -O0
-else
-	CFLAGS += -O2
-endif
-
 config.status: configure patch
 	dh_testdir
 
-	./configure --host=$(DEB_HOST_GNU_TYPE) \
-	            --build=$(DEB_BUILD_GNU_TYPE) \
-	            --with-apxs=$(APXS2) \
-	            --with-python=/usr/bin/python$(PY_VERSION) \
-	            CFLAGS="$(CFLAGS)" LDFLAGS="-Wl,-z,defs"
+	./configure --with-apxs=$(APXS2) \
+	            --with-python=/usr/bin/python$(PY_VERSION) 
 
 
 build: build-stamp
