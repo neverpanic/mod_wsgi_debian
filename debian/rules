@@ -16,7 +16,7 @@ include /usr/share/dpatch/dpatch.make
 
 APXS2=/usr/bin/apxs2
 PY_VERSION=$(shell dpkg -s python | grep ^Version | sed 's,Version: \([0-9]\.[0-9]\).*,\1,')
-PY_NEXT_VERSION=$(shell echo $(PY_VERSION) | awk '{ print (($1*10)+1)/10 }')
+PY_NEXT_VERSION=$(shell echo $(PY_VERSION) | awk '{ print (($$1*10)+1)/10 }')
 
 CFLAGS = -Wall -g
 
