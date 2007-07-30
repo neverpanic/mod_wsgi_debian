@@ -1,4 +1,4 @@
-mod-wsgi (1.0c1-1) unstable; urgency=low
+mod-wsgi (1.0~c1-1) unstable; urgency=low
 
   * Initial release (Closes: #415332)
 
