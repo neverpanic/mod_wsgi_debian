@@ -2,7 +2,7 @@
 
 set -e
 
-apache-force-reload() {
+apache_force_reload() {
     if apache2ctl configtest 2>/dev/null; then
         invoke-rc.d apache2 force-reload || true
     else
@@ -13,13 +13,15 @@ apache-force-reload() {
 if [ -z "$2" ]; then
     if [ -e /etc/apache2/apache2.conf ]; then
         a2enmod mod-wsgi >/dev/null || true
-        apache-force-reload
+        apache_force_reload
     fi
 else
     #we're upgrading
     if [ -e /etc/apache2/mods-enabled/mod-wsgi.load ]; then
-        apache-force-reload
+        apache_force_reload
     fi
 fi
+
+#DEBHELPER#
 
 exit 0
