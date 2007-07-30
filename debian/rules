@@ -1,0 +1,81 @@
+#!/usr/bin/make -f
+
+PACKAGE=libapache2-mod-wsgi
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+
+# we need dpatch
+include /usr/share/dpatch/dpatch.make
+
+APXS2=/usr/bin/apxs2
+PY_VERSION=$(shell dpkg -s python | grep ^Version | sed 's,Version: \([0-9]\.[0-9]\).*,\1,')
+PY_NEXT_VERSION=$(shell echo $(PY_VERSION) | awk '{ print (($$1*10)+1)/10 }')
+
+config.status: configure patch
+	dh_testdir
+
+	./configure --with-apxs=$(APXS2) \
+	            --with-python=/usr/bin/python$(PY_VERSION) 
+
+
+build: build-stamp
+
+build-stamp:  config.status
+	dh_testdir
+
+	$(MAKE)
+
+	touch $@
+
+clean: clean-patched unpatch
+
+clean-patched:
+	dh_testdir
+	dh_testroot
+	rm -f build-stamp 
+
+	[ ! -f Makefile ] || $(MAKE) distclean
+
+	dh_clean 
+
+install: build
+	dh_testdir
+	dh_testroot
+	dh_clean -k 
+	dh_installdirs
+	
+	$(MAKE) DESTDIR=$(CURDIR)/debian/$(PACKAGE) install
+
+
+# Build architecture-independent files here.
+binary-indep: build install
+
+# Build architecture-dependent files here.
+binary-arch: build install
+	dh_testdir
+	dh_testroot
+	dh_installchangelogs 
+	dh_installdocs
+	dh_install
+	dh_installman
+	dh_link
+	dh_strip
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	dh_shlibdeps
+	#We wan't to make sure that mod-wsgi depends on the default
+	#python version as most people won't take care of it.
+	#This way should ensure that the package is binNMU-able when
+	#Debian switches to a new default Py version.
+	echo 'python:Depends=python (>= $(PY_VERSION)), python (<< $(PY_NEXT_VERSION))' \
+	     >> $(CURDIR)/debian/$(PACKAGE).substvars
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary: binary-indep binary-arch
+.PHONY: build clean binary-indep binary-arch binary install
+.PHONY: clean-patched patch unpatch

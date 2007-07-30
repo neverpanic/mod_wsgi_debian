@@ -1,0 +1,3 @@
+makefile-destdir
+configure-apache-version
+umask-fix

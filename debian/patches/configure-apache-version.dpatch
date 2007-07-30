@@ -1,0 +1,33 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## configure-apache-version.dpatch by Bernd Zeimetz <bernd@bzed.de>
+##
+## DP: we don't want to build-depend on Apache2 to build the package.
+
+@DPATCH@
+diff -urNad mod-wsgi~/configure mod-wsgi/configure
+--- mod-wsgi~/configure	2007-06-23 06:05:48.000000000 +0200
++++ mod-wsgi/configure	2007-07-30 21:44:01.000000000 +0200
+@@ -1385,14 +1385,16 @@
+ 
+ 
+ 
+-echo "$as_me:$LINENO: checking Apache version" >&5
+-echo $ECHO_N "checking Apache version... $ECHO_C" >&6
+-HTTPD="`${APXS} -q SBINDIR`/`${APXS} -q TARGET`"
+-HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
+-echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
+-echo "${ECHO_T}$HTTPD_VERSION" >&6
++#echo "$as_me:$LINENO: checking Apache version" >&5
++#echo $ECHO_N "checking Apache version... $ECHO_C" >&6
++#HTTPD="`${APXS} -q SBINDIR`/`${APXS} -q TARGET`"
++#HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
++#echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
++#echo "${ECHO_T}$HTTPD_VERSION" >&6
++#
++#HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
+ 
+-HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
++HTTPD_MAJOR_VERSION=2
+ 
+ rm -f Makefile.in
+ ln -s Makefile-${HTTPD_MAJOR_VERSION}.X.in Makefile.in

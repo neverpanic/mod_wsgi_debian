@@ -1,0 +1,6 @@
+mod-wsgi (1.0~c1-1) unstable; urgency=low
+
+  * Initial release (Closes: #415332)
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Mon, 30 Jul 2007 16:22:40 +0200
+

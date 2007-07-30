@@ -1,0 +1,4 @@
+version=3
+
+opts="filenamemangle=s/_/-/,uversionmangle=s/([0-9.]*)(.*)/$1~$2/" \
+http://code.google.com/p/modwsgi/downloads/list http://modwsgi.googlecode.com/files/mod_wsgi-(.*)\.tar\.gz
