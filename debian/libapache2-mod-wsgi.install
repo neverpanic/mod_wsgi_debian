@@ -1,1 +1,2 @@
 debian/mod-wsgi.load etc/apache2/mods-available
+debian/mod-wsgi.conf etc/apache2/mods-available
