@@ -1,4 +1,4 @@
-mod-wsgi (1.0~c1-2) UNRELEASED; urgency=low
+mod-wsgi (1.0~c1-2) unstable; urgency=low
 
   * debian/mod-wsgi.conf:
     - Adding a config file for mod-wsgi to allow easy configuration for users
