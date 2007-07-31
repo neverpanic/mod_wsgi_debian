@@ -1,3 +1,13 @@
+mod-wsgi (1.0~c1-2) unstable; urgency=low
+
+  * debian/mod-wsgi.conf:
+    - Adding a config file for mod-wsgi to allow easy configuration for users
+  * debian/control:
+    - Adding apache2-mpm-worker | apache2-mpm-event as Recommends to provide a
+      fast default worker
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Tue, 31 Jul 2007 02:31:59 +0200
+
 mod-wsgi (1.0~c1-1) unstable; urgency=low
 
   * Initial release (Closes: #415332)
