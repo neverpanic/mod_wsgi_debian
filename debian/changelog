@@ -1,3 +1,12 @@
+mod-wsgi (1.0~c1-3) UNRELEASED; urgency=low
+
+  * debian/control:
+    - removing autotools-dev build-dep, as configure relies on the information
+      provided by apxs2 completely and does not take care of config.sub or
+      config.guess.
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Wed, 01 Aug 2007 02:21:25 +0200
+
 mod-wsgi (1.0~c1-2) unstable; urgency=low
 
   * debian/mod-wsgi.conf:

@@ -3,7 +3,7 @@ Section: python
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
 Uploaders: Bernd Zeimetz <bernd@bzed.de>
-Build-Depends: debhelper (>= 5), autotools-dev, python-dev, apache2-threaded-dev, dpatch
+Build-Depends: debhelper (>= 5), python-dev, apache2-threaded-dev, dpatch
 Standards-Version: 3.7.2
 XS-Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
 XS-Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/?op=log
