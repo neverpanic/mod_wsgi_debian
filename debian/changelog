@@ -1,3 +1,20 @@
+mod-wsgi (1.0~c2-1) unstable; urgency=low
+
+  * New upstream version
+  * debian/control:
+    - Removing autotools-dev build-dep, as configure relies on the information
+      provided by apxs2 and does not take care of config.sub or config.guess.
+  * debian/watch:
+    - Fixing filenamemangle to allow uscan to download the file
+  * debian/patches/makefile-destdir.dpatch,umask-fix.dpatch:
+    - Removing files, changes were added upstream
+  * debian/patches/r413-error-log-fix.dpatch:
+    - Adding patch from upstream's svn to fix a bug which could result in a
+      crash of mod-wsgi, for details see
+      http://code.google.com/p/modwsgi/issues/detail?id=24
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Sun, 12 Aug 2007 12:56:10 +0200
+
 mod-wsgi (1.0~c1-2) unstable; urgency=low
 
   * debian/mod-wsgi.conf:

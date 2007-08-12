@@ -195,7 +195,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "1.0c1"
+#define MOD_WSGI_VERSION_STRING "1.0c2"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -3188,12 +3188,10 @@ static void wsgi_python_init(apr_pool_t *p)
         if (wsgi_server_config->python_home)
             Py_SetPythonHome((char *)wsgi_server_config->python_home);
 
-#ifndef WIN32
         if (wsgi_server_config->python_path) {
             putenv(apr_psprintf(p, "PYTHONPATH=%s",
                                 wsgi_server_config->python_path));
         }
-#endif
 
         /* Initialise Python. */
 
@@ -3224,9 +3222,8 @@ static void wsgi_python_init(apr_pool_t *p)
         /* Initialise threading. */
 
         PyEval_InitThreads();
-        PyEval_ReleaseLock();
-
         PyThreadState_Swap(NULL);
+        PyEval_ReleaseLock();
 
         wsgi_python_initialized = 1;
     }
@@ -4741,11 +4738,11 @@ static const command_rec wsgi_commands[] =
 #ifndef WIN32
     { "WSGIPythonExecutable", wsgi_set_python_executable, NULL,
         RSRC_CONF, TAKE1, "Python executable absolute path name." },
+#endif
     { "WSGIPythonHome", wsgi_set_python_home, NULL,
         RSRC_CONF, TAKE1, "Python prefix/exec_prefix absolute path names." },
     { "WSGIPythonPath", wsgi_set_python_path, NULL,
         RSRC_CONF, TAKE1, "Python module search path." },
-#endif
 
     { "WSGIRestrictStdin", wsgi_set_restrict_stdin, NULL,
         RSRC_CONF, TAKE1, "Enable/Disable restrictions on use of STDIN." },
@@ -5000,7 +4997,7 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
                 return "Invalid umask for WSGI daemon process.";
 
             errno = 0;
-            umask = strtol(value, (char **)&value, 7);
+            umask = strtol(value, (char **)&value, 8);
 
             if (*value || errno == ERANGE || umask < 0)
                 return "Invalid umask for WSGI daemon process.";
@@ -7048,11 +7045,11 @@ static const command_rec wsgi_commands[] =
 #ifndef WIN32
     AP_INIT_TAKE1("WSGIPythonExecutable", wsgi_set_python_executable, NULL,
         RSRC_CONF, "Python executable absolute path name."),
+#endif
     AP_INIT_TAKE1("WSGIPythonHome", wsgi_set_python_home, NULL,
         RSRC_CONF, "Python prefix/exec_prefix absolute path names."),
     AP_INIT_TAKE1("WSGIPythonPath", wsgi_set_python_path, NULL,
         RSRC_CONF, "Python module search path."),
-#endif
 
     AP_INIT_TAKE1("WSGIRestrictStdin", wsgi_set_restrict_stdin, NULL,
         RSRC_CONF, "Enable/Disable restrictions on use of STDIN."),
