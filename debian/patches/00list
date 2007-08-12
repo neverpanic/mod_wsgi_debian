@@ -1,3 +1,2 @@
-makefile-destdir
 configure-apache-version
-umask-fix
+r413-error-log-fix

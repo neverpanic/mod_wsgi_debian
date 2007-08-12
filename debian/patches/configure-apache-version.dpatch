@@ -5,9 +5,9 @@
 
 @DPATCH@
 diff -urNad mod-wsgi~/configure mod-wsgi/configure
---- mod-wsgi~/configure	2007-06-23 06:05:48.000000000 +0200
-+++ mod-wsgi/configure	2007-07-30 21:44:01.000000000 +0200
-@@ -1385,14 +1385,16 @@
+--- mod-wsgi~/configure	2007-07-31 14:13:08.000000000 +0200
++++ mod-wsgi/configure	2007-08-12 12:55:24.000000000 +0200
+@@ -1385,17 +1385,18 @@
  
  
  
@@ -23,7 +23,9 @@ diff -urNad mod-wsgi~/configure mod-wsgi/configure
 +#HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
 +#echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
 +#echo "${ECHO_T}$HTTPD_VERSION" >&6
-+#
+ 
+ LIBEXECDIR="`${APXS} -q LIBEXECDIR`"
+ 
 +#HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
  
 -HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`

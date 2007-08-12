@@ -19,4 +19,4 @@ Description: Python WSGI adapter module for Apache
  based web applications within Apache. The adapter provides significantly
  better performance than using existing WSGI adapters for mod_python or CGI.
  .
-  Homepage: http://code.google.com/p/modwsgi/
+  Homepage: http://www.modwsgi.org/
