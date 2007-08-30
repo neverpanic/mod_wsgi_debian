@@ -1,3 +1,12 @@
+mod-wsgi (1.0~c4-1) unstable; urgency=low
+
+  * New upstream version
+  * debian/patches:
+    - Removing r413-error-log-fix.dpatch as this fix is included in the
+      upstream tarball
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Thu, 30 Aug 2007 17:20:36 +0200
+
 mod-wsgi (1.0~c2-1) unstable; urgency=low
 
   * New upstream version
