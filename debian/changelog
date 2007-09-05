@@ -1,3 +1,11 @@
+mod-wsgi (1.0-1) unstable; urgency=low
+
+  * New upstream version - first stable release.
+  * debian/watch:
+    - Small fix to recognize versions correctly
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Wed, 05 Sep 2007 14:17:20 +0200
+
 mod-wsgi (1.0~c4-1) unstable; urgency=low
 
   * New upstream version
