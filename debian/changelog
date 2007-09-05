@@ -1,4 +1,4 @@
-mod-wsgi (1.0) unstable; urgency=low
+mod-wsgi (1.0-1) unstable; urgency=low
 
   * New upstream version - first stable release.
   * debian/watch:
