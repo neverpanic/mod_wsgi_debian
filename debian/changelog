@@ -1,3 +1,13 @@
+mod-wsgi (1.0-2) unstable; urgency=low
+
+  * debian/control:
+    - Moving apache workers from Recommends to Suggests to make the package
+      installation more easy for those wh oreally want to use php, which
+      depends on the preforking worker (Closes: #443105).
+    - Adding apache2 to Depends
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Tue, 18 Sep 2007 20:35:06 +0200
+
 mod-wsgi (1.0-1) unstable; urgency=low
 
   * New upstream version - first stable release.
