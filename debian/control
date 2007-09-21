@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
 Uploaders: Bernd Zeimetz <bernd@bzed.de>
 Build-Depends: debhelper (>= 5), python-dev, apache2-threaded-dev, dpatch
+Homepage: http://www.modwsgi.org/
 Standards-Version: 3.7.2
 XS-Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
 XS-Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/?op=log
@@ -18,5 +19,3 @@ Description: Python WSGI adapter module for Apache
  web applications written in Python) compliant interface for hosting Python
  based web applications within Apache. The adapter provides significantly
  better performance than using existing WSGI adapters for mod_python or CGI.
- .
-  Homepage: http://www.modwsgi.org/
