@@ -1,9 +1,10 @@
-mod-wsgi (1.0-3) UNRELEASED; urgency=low
+mod-wsgi (1.1-1) unstable; urgency=low
 
+  * New upstream version
   * debian/control:
     - Adding Homepage field, removing pseudo-field from description
 
- -- Bernd Zeimetz <bernd@bzed.de>  Fri, 21 Sep 2007 18:06:35 +0200
+ -- Bernd Zeimetz <bernd@bzed.de>  Mon, 01 Oct 2007 10:28:37 +0200
 
 mod-wsgi (1.0-2) unstable; urgency=low
 
