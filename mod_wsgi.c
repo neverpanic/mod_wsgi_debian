@@ -195,7 +195,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "1.0"
+#define MOD_WSGI_VERSION_STRING "1.1"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -897,6 +897,9 @@ static void Log_output(LogObject *self, const char *msg)
             strncpy(s+m, p, q-p);
             s[n-1] = '\0';
 
+            free(self->s);
+            self->s = NULL;
+
             if (self->r) {
                 Py_BEGIN_ALLOW_THREADS
                 ap_log_rerror(APLOG_MARK, WSGI_LOG_LEVEL(self->level),
@@ -909,9 +912,6 @@ static void Log_output(LogObject *self, const char *msg)
                              wsgi_server, "%s", s);
                 Py_END_ALLOW_THREADS
             }
-
-            free(self->s);
-            self->s = NULL;
 
             free(s);
         }
@@ -1084,7 +1084,7 @@ static PyTypeObject Log_Type = {
     0,                      /*tp_is_gc*/
 };
 
-void wsgi_log_python_error(request_rec *r, LogObject *log)
+static void wsgi_log_python_error(request_rec *r, LogObject *log)
 {
     PyObject *m = NULL;
     PyObject *result = NULL;
@@ -1138,8 +1138,8 @@ void wsgi_log_python_error(request_rec *r, LogObject *log)
                                  Py_None, log);
             result = PyEval_CallObject(o, args);
             Py_DECREF(args);
+            Py_DECREF(o);
         }
-        Py_DECREF(o);
     }
 
     if (!result) {
@@ -2562,8 +2562,8 @@ static PyObject *wsgi_signal_intercept(PyObject *self, PyObject *args)
             Py_XDECREF(result);
             Py_DECREF(args);
             Py_DECREF(log);
+            Py_DECREF(o);
         }
-        Py_DECREF(o);
     }
 
     Py_INCREF(m);
@@ -2987,8 +2987,8 @@ static void Interpreter_dealloc(InterpreterObject *self)
                     result = PyEval_CallObject(o, args);
                     Py_DECREF(args);
                     Py_DECREF(log);
+                    Py_DECREF(o);
                 }
-                Py_DECREF(o);
             }
 
             if (!result) {
@@ -3614,13 +3614,8 @@ static int wsgi_execute_script(request_rec *r)
                                  "interpreter '%s'.", getpid(),
                                  config->application_group);
 
-                    if (Py_FlushLine())
-                        PyErr_Clear();
-
 #if APR_HAS_THREADS
-                    Py_BEGIN_ALLOW_THREADS
                     apr_thread_mutex_unlock(wsgi_module_lock);
-                    Py_END_ALLOW_THREADS
 #endif
 
                     return HTTP_INTERNAL_SERVER_ERROR;
@@ -3641,9 +3636,7 @@ static int wsgi_execute_script(request_rec *r)
     /* Safe now to release the module lock. */
 
 #if APR_HAS_THREADS
-    Py_BEGIN_ALLOW_THREADS
     apr_thread_mutex_unlock(wsgi_module_lock);
-    Py_END_ALLOW_THREADS
 #endif
 
     /* Assume an internal server error unless everything okay. */
@@ -3682,11 +3675,11 @@ static int wsgi_execute_script(request_rec *r)
                 adapter->input->r = NULL;
 
                 /*
-		 * Flush any data held within error log object
-		 * and mark it as expired so that it can't be
-		 * used beyond life of the request. We hope that
-		 * this doesn't error, as it will overwrite any
-		 * error from application if it does.
+                 * Flush any data held within error log object
+                 * and mark it as expired so that it can't be
+                 * used beyond life of the request. We hope that
+                 * this doesn't error, as it will overwrite any
+                 * error from application if it does.
                  */
 
                 args = PyTuple_New(0);
@@ -5410,21 +5403,83 @@ static int wsgi_setup_socket(WSGIProcessGroup *process)
     return sockfd;
 }
 
+static int wsgi_hook_daemon_handler(conn_rec *c);
+
 static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
                                 apr_bucket_alloc_t *bucket_alloc,
                                 WSGIDaemonProcess *daemon)
 {
-    conn_rec *current_conn;
+    apr_status_t rv;
+
+    conn_rec *c;
     ap_sb_handle_t *sbh;
+    core_net_rec *net;
+
+    /*
+     * This duplicates Apache connection setup. This is done
+     * here rather than letting Apache do it so that avoid the
+     * possibility that any Apache modules, such as mod_ssl
+     * will add their own input/output filters to the chain.
+     */
 
     ap_create_sb_handle(&sbh, p, -1, 0);
 
-    current_conn = ap_run_create_connection(p, daemon->group->server, sock,
-                                            1, sbh, bucket_alloc);
-    if (current_conn) {
-        ap_process_connection(current_conn, sock);
-        ap_lingering_close(current_conn);
+    c = (conn_rec *)apr_pcalloc(p, sizeof(conn_rec));
+
+    c->sbh = sbh;
+
+    c->conn_config = ap_create_conn_config(p);
+    c->notes = apr_table_make(p, 5);
+    c->pool = p;
+    
+    if ((rv = apr_socket_addr_get(&c->local_addr, APR_LOCAL, sock))
+        != APR_SUCCESS) {
+        ap_log_error(APLOG_MARK, WSGI_LOG_INFO(rv), wsgi_server,
+                     "mod_wsgi (pid=%d): Failed call "
+                     "apr_socket_addr_get(APR_LOCAL).", getpid());
+        apr_socket_close(sock);
+        return;
     }
+    apr_sockaddr_ip_get(&c->local_ip, c->local_addr);
+
+    if ((rv = apr_socket_addr_get(&c->remote_addr, APR_REMOTE, sock))
+        != APR_SUCCESS) {
+        ap_log_error(APLOG_MARK, WSGI_LOG_INFO(rv), wsgi_server,
+                     "mod_wsgi (pid=%d): Failed call "
+                     "apr_socket_addr_get(APR_REMOTE).", getpid());
+        apr_socket_close(sock);
+        return;
+    }
+    apr_sockaddr_ip_get(&c->remote_ip, c->remote_addr);
+
+    c->base_server = daemon->group->server;
+
+    c->bucket_alloc = bucket_alloc;
+    c->id = 1;
+
+    net = apr_palloc(c->pool, sizeof(core_net_rec));
+
+    rv = apr_socket_timeout_set(sock, c->base_server->timeout);
+    if (rv != APR_SUCCESS) {
+        ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(rv), wsgi_server,
+                      "mod_wsgi (pid=%d): Failed call "
+                      "apr_socket_timeout_set().", getpid());
+    }
+    
+    net->c = c;
+    net->in_ctx = NULL;
+    net->out_ctx = NULL;
+    net->client_socket = sock;
+                      
+    ap_set_module_config(net->c->conn_config, &core_module, sock);
+    ap_add_input_filter_handle(ap_core_input_filter_handle,
+                               net, NULL, net->c);
+    ap_add_output_filter_handle(ap_core_output_filter_handle,
+                                net, NULL, net->c);
+
+    wsgi_hook_daemon_handler(c);
+
+    ap_lingering_close(c);
 }
 
 static void wsgi_daemon_worker(apr_pool_t *p, WSGIDaemonThread *thread)
@@ -5640,7 +5695,6 @@ static void *wsgi_daemon_thread(apr_thread_t *thd, void *data)
 static void *wsgi_reaper_thread(apr_thread_t *thd, void *data)
 {
     WSGIDaemonProcess *daemon = data;
-    apr_pool_t *p = apr_thread_pool_get(thd);
 
     sleep(daemon->group->timeout);
 
@@ -6600,7 +6654,7 @@ static apr_status_t wsgi_read_request(apr_socket_t *sock, request_rec *r)
 
 static ap_filter_rec_t *wsgi_header_filter_handle;
 
-apr_status_t wsgi_header_filter(ap_filter_t *f, apr_bucket_brigade *b)
+static apr_status_t wsgi_header_filter(ap_filter_t *f, apr_bucket_brigade *b)
 {
     request_rec *r = f->r;
 
@@ -7024,11 +7078,41 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
     wsgi_python_child_init(p);
 }
 
+#if defined(MOD_WSGI_WITH_DAEMONS)
+APR_OPTIONAL_FN_TYPE(ap_logio_add_bytes_out) *wsgi_logio_add_bytes_out;
+
+static void ap_logio_add_bytes_out(conn_rec *c, apr_off_t bytes)
+{
+    if (!wsgi_daemon_pool && wsgi_logio_add_bytes_out)
+        wsgi_logio_add_bytes_out(c, bytes);
+}
+
+static int wsgi_hook_logio(apr_pool_t *pconf, apr_pool_t *ptemp,
+                           apr_pool_t *plog, server_rec *s)
+{
+    /*
+     * This horrible fiddle is to insert a proxy function before
+     * the normal ap_logio_add_bytes_out() function so that the
+     * call to it can be disabled when mod_wsgi running in daemon
+     * mode. If this is not done, then daemon process will crash
+     * when mod_logio has been loaded.
+     */
+
+    wsgi_logio_add_bytes_out = APR_RETRIEVE_OPTIONAL_FN(ap_logio_add_bytes_out);
+
+    APR_REGISTER_OPTIONAL_FN(ap_logio_add_bytes_out);
+
+    return OK;
+}
+#endif
+
 static void wsgi_register_hooks(apr_pool_t *p)
 {
-    static const char * const prev[] = { "mod_alias.c", NULL };
-    static const char * const next[]= { "mod_userdir.c",
+    static const char * const prev1[] = { "mod_alias.c", NULL };
+    static const char * const next1[]= { "mod_userdir.c",
                                         "mod_vhost_alias.c", NULL };
+
+    static const char * const next2[] = { "core.c", NULL };
 
     /*
      * Perform initialisation last in the post config phase to
@@ -7040,12 +7124,11 @@ static void wsgi_register_hooks(apr_pool_t *p)
     ap_hook_post_config(wsgi_hook_init, NULL, NULL, APR_HOOK_LAST);
     ap_hook_child_init(wsgi_hook_child_init, NULL, NULL, APR_HOOK_MIDDLE);
 
-    ap_hook_translate_name(wsgi_hook_intercept, prev, next, APR_HOOK_MIDDLE);
+    ap_hook_translate_name(wsgi_hook_intercept, prev1, next1, APR_HOOK_MIDDLE);
     ap_hook_handler(wsgi_hook_handler, NULL, NULL, APR_HOOK_MIDDLE);
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
-    ap_hook_process_connection(wsgi_hook_daemon_handler, NULL, NULL,
-                               APR_HOOK_REALLY_FIRST);
+    ap_hook_post_config(wsgi_hook_logio, NULL, next2, APR_HOOK_REALLY_FIRST);
 
     wsgi_header_filter_handle =
         ap_register_output_filter("WSGI_HEADER", wsgi_header_filter,
