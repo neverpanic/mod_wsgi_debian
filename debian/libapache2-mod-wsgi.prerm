@@ -6,6 +6,8 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     a2dismod mod-wsgi || true
 fi
 
+rm -f /usr/lib/apache2/modules/mod_wsgi.so
+
 #DEBHELPER#
 
 exit 0

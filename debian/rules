@@ -10,44 +10,42 @@ PACKAGE=libapache2-mod-wsgi
 include /usr/share/dpatch/dpatch.make
 
 APXS2=/usr/bin/apxs2
-PY_VERSION=$(shell pyversions -vd)
-PY_NEXT_VERSION=$(shell echo $(PY_VERSION) | awk '{ print (($$1*10)+1)/10 }')
+PYVERS=$(shell pyversions -vs)
+PYMIN=$(shell echo $(PYVERS) | awk '{print $$1}')
+PYMAX=$(shell echo $(PYVERS) | LANG=C awk '{print $$NF+0.1}')
 
-config.status: configure patch
+build-%/config.status:
 	dh_testdir
+	mkdir -p build-$*
+	cp *.in *.c configure build-$*/
+	cd build-$* && ./configure --with-apxs=$(APXS2) \
+	            --with-python=/usr/bin/python$*
 
-	./configure --with-apxs=$(APXS2) \
-	            --with-python=/usr/bin/python$(PY_VERSION) 
-
-
-build: build-stamp
-
-build-stamp:  config.status
+build-%/build-stamp: build-%/config.status
 	dh_testdir
-
-	$(MAKE)
-
+	$(MAKE) -C build-$*
 	touch $@
 
-clean: clean-patched unpatch
+build: patch $(PYVERS:%=build-%/build-stamp)
 
-clean-patched:
+clean: unpatch
 	dh_testdir
 	dh_testroot
-	rm -f build-stamp 
-
-	[ ! -f Makefile ] || $(MAKE) distclean
-
+	rm -rf build-*
 	dh_clean 
 
-install: build
+install-clean:
 	dh_testdir
 	dh_testroot
-	dh_clean -k 
+	dh_clean -k
 	dh_installdirs
-	
-	$(MAKE) DESTDIR=$(CURDIR)/debian/$(PACKAGE) install
 
+install-%: build-%/build-stamp
+	$(MAKE) -C build-$* DESTDIR=$(CURDIR)/debian/$(PACKAGE) install
+	mv $(CURDIR)/debian/$(PACKAGE)/usr/lib/apache2/modules/mod_wsgi.so \
+		$(CURDIR)/debian/$(PACKAGE)/usr/lib/apache2/modules/mod_wsgi.so-$*
+
+install: build install-clean $(PYVERS:%=install-%)
 
 # Build architecture-independent files here.
 binary-indep: build install
@@ -59,18 +57,20 @@ binary-arch: build install
 	dh_installchangelogs 
 	dh_installdocs
 	dh_install
+	install -d -m 755 debian/$(PACKAGE)/usr/share/python/runtime.d
+	install -m 755 debian/*.rtupdate debian/$(PACKAGE)/usr/share/python/runtime.d/
 	dh_installman
 	dh_link
 	dh_strip
 	dh_compress
 	dh_fixperms
 	dh_installdeb
+	# Ugh, ignore libpython dependencies
+	( for i in $(PYVERS); do echo libpython$$i 1.0; done ) > debian/shlibs.local
 	dh_shlibdeps
-	#We wan't to make sure that mod-wsgi depends on the default
-	#python version as most people won't take care of it.
-	#This way should ensure that the package is binNMU-able when
-	#Debian switches to a new default Py version.
-	echo 'python:Depends=python (>= $(PY_VERSION)), python (<< $(PY_NEXT_VERSION))' \
+	rm -f debian/shlibs.local
+	# Generate dependencies manually as there are no public modules
+	echo 'python:Depends=python (>= $(PYMIN)), python (<< $(PYMAX))' \
 	     >> $(CURDIR)/debian/$(PACKAGE).substvars
 	dh_gencontrol
 	dh_md5sums

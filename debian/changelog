@@ -1,3 +1,15 @@
+mod-wsgi (1.1-2) unstable; urgency=low
+
+  * Applying a patch from Josselin Mouette - thanks, introducing the
+    following changes
+    - Build the module for all supported python versions.
+    - Ship a rtupdate script to rotate to the new version when the python
+      version changes.
+    - Build-depend on python-all-dev.
+    (Closes: #445486)
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Sat, 06 Oct 2007 13:27:39 +0200
+
 mod-wsgi (1.1-1) unstable; urgency=low
 
   * New upstream version
