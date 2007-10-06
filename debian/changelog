@@ -8,7 +8,10 @@ mod-wsgi (1.1-2) unstable; urgency=low
     - Build-depend on python-all-dev.
     (Closes: #445486)
 
- -- Bernd Zeimetz <bernd@bzed.de>  Sat, 06 Oct 2007 13:27:39 +0200
+  * debian/control:
+    - Renaming XS-Vcs-* fields to Vcs-*, as they're supported by dpkg now
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Sat, 06 Oct 2007 15:16:00 +0200
 
 mod-wsgi (1.1-1) unstable; urgency=low
 
