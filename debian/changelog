@@ -6,6 +6,7 @@ mod-wsgi (2.0~c1-2) experimental; urgency=low
       apache-threaded-dev. In the rare case that somebody would like to
       configure the stack size of WSGIDaemonProcess, both ThreadStackSize and
       stack-size option need to be set due to this change.
+      Thanks to the upstream author, Graham Dumpleton.
 
  -- Bernd Zeimetz <bernd@bzed.de>  Tue, 30 Oct 2007 22:11:50 +0100
 
