@@ -1,8 +1,14 @@
 mod-wsgi (2.0~c1-1) experimental; urgency=low
 
+  [ Bernd Zeimetz ]
   *  Beta version of the upcoming 2.0 version.
 
- -- Bernd Zeimetz <bernd@bzed.de>  Tue, 30 Oct 2007 03:06:33 +0100
+  [ Piotr Ożarowski ]
+  * debian/control:
+    - move "apache2-mpm-worker | apache2-mpm-event" from Suggests to Depends
+      as 2.0~c1 doesn't work with apache2-mpm-prefork
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Tue, 30 Oct 2007 21:45:46 +0100
 
 mod-wsgi (1.2-1) unstable; urgency=low
 
