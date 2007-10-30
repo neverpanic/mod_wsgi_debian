@@ -1,3 +1,12 @@
+mod-wsgi (1.2-1) unstable; urgency=low
+
+  * New upstream version
+  * debian/watch:
+    - Only watching for updates of released versions now, beta versions go
+      into an experimental branch.
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Tue, 30 Oct 2007 03:04:20 +0100
+
 mod-wsgi (1.1-2) unstable; urgency=low
 
   * Applying a patch from Josselin Mouette - thanks, introducing the

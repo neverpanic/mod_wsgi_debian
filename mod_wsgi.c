@@ -195,7 +195,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "1.1"
+#define MOD_WSGI_VERSION_STRING "1.2"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -504,6 +504,27 @@ typedef struct {
     int case_sensitivity;
 } WSGIRequestConfig;
 
+static int wsgi_find_path_info(const char *uri, const char *path_info)
+{
+    int lu = strlen(uri);
+    int lp = strlen(path_info);
+
+    while (lu-- && lp-- && uri[lu] == path_info[lp]) {
+        if (path_info[lp] == '/') {
+            while (lu && uri[lu-1] == '/') lu--;
+        }
+    }
+
+    if (lu == -1) {
+        lu = 0;
+    }
+
+    while (uri[lu] != '\0' && uri[lu] != '/') {
+        lu++;
+    }
+    return lu;
+}
+
 static const char *wsgi_script_name(request_rec *r)
 {
     char *script_name = NULL;
@@ -513,7 +534,7 @@ static const char *wsgi_script_name(request_rec *r)
         script_name = apr_pstrdup(r->pool, r->uri);
     }
     else {
-        path_info_start = ap_find_path_info(r->uri, r->path_info);
+        path_info_start = wsgi_find_path_info(r->uri, r->path_info);
 
         script_name = apr_pstrndup(r->pool, r->uri, path_info_start);
     }
@@ -1907,17 +1928,9 @@ static PyObject *Adapter_start(AdapterObject *self, PyObject *args)
             if (!PyArg_ParseTuple(exc_info, "OOO", &type, &value, &traceback))
                 return NULL;
 
-            PyErr_NormalizeException(&type, &value, &traceback);
-
-            if (!value) {
-                value = Py_None;
-                Py_INCREF(value);
-            }
-
-            if (!traceback) {
-                traceback = Py_None;
-                Py_INCREF(traceback);
-            }
+            Py_INCREF(type);
+            Py_INCREF(value);
+            Py_INCREF(traceback);
 
             PyErr_Restore(type, value, traceback);
 
@@ -2307,7 +2320,12 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
                 msg = PyString_AsString(item);
                 length = PyString_Size(item);
 
-                if (!msg || !Adapter_output(self, msg, length)) {
+                if (!msg) {
+                    Py_DECREF(item);
+                    break;
+                }
+
+                if (length && !Adapter_output(self, msg, length)) {
                     Py_DECREF(item);
                     break;
                 }
@@ -2323,8 +2341,19 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
             Py_DECREF(iterator);
         }
 
-        if (PyErr_Occurred())
+        if (PyErr_Occurred()) {
+            /*
+	     * Response content has already been sent, so cannot
+	     * return an internal server error as Apache will
+	     * append its own error page. Thus need to return OK
+	     * and just truncate the response.
+             */
+
+            if (self->status_line)
+                result = OK;
+
             wsgi_log_python_error(self->r, self->log);
+        }
 
         if (PyObject_HasAttrString(self->sequence, "close")) {
             PyObject *args = NULL;
@@ -3400,6 +3429,11 @@ static PyObject *wsgi_load_source(request_rec *r, const char *name, int found)
     }
 
     if (!(fp = fopen(r->filename, "r"))) {
+         ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(errno), r,
+                       "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                       "Call to fopen() failed for '%s'.", getpid(),
+                       config->process_group, config->application_group,
+                       r->filename);
         PyErr_SetFromErrno(PyExc_IOError);
         return NULL;
     }
@@ -5934,8 +5968,6 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
         wsgi_daemon_shutdown = 0;
 
-        apr_signal(SIGCHLD, SIG_IGN);
-
         if (daemon->group->threads == 1) {
             apr_signal(SIGINT, wsgi_signal_handler);
             apr_signal(SIGTERM, wsgi_signal_handler);
@@ -6840,7 +6872,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     /* Read in the request details and setup request object. */
 
     if ((rv = wsgi_read_request(csd, r)) != APR_SUCCESS) {
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_CRIT(rv), r,
+        ap_log_error(APLOG_MARK, WSGI_LOG_CRIT(rv), wsgi_server,
                      "mod_wsgi (pid=%d): Unable to read WSGI request.",
                      getpid());
 
@@ -6853,14 +6885,26 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
 
     r->filename = (char *)apr_table_get(r->subprocess_env, "SCRIPT_FILENAME");
 
-    apr_stat(&r->finfo, r->filename, APR_FINFO_SIZE, r->pool);
+    if ((rv = apr_stat(&r->finfo, r->filename, APR_FINFO_SIZE,
+                       r->pool)) != APR_SUCCESS) {
+        /*
+         * Don't fail at this point. Allow the lack of file to
+         * be detected later when trying to load the script file.
+         */
+
+        ap_log_error(APLOG_MARK, WSGI_LOG_WARNING(rv), wsgi_server,
+                     "mod_wsgi (pid=%d): Call to apr_stat() failed for '%s'.",
+                     getpid(), r->filename);
+
+        r->finfo.mtime = 0;
+    }
 
     /* Check magic marker used to validate origin of request. */
 
     magic = apr_table_get(r->subprocess_env, "mod_wsgi.magic");
 
     if (!magic) {
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ALERT(rv), r,
+        ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(rv), wsgi_server,
                      "mod_wsgi (pid=%d): Request origin could not be "
                      "validated.", getpid());
 
@@ -6875,7 +6919,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     hash = ap_md5(r->pool, (const unsigned char *)hash);
 
     if (strcmp(magic, hash) != 0) {
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ALERT(rv), r,
+        ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(rv), wsgi_server,
                      "mod_wsgi (pid=%d): Request origin could not be "
                      "validated.", getpid());
 
