@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## ap_thread_stacksize.dpatch by Bernd Zeimetz <bernd@bzed.de>
+##
+## DP: From <88e286470710301405h412392f8ldc3e882ba941a27b@mail.gmail.com>
+## DP: It is not critical. I was just trying to inherit stack size from
+## DP: ThreadStackSize directive. Just means that someone will need to set
+## DP: both ThreadStackSize and stack-size option to WSGIDaemonProcess. Since
+## DP: rare that this would required, not too concerned in dropping it if it
+## DP: causes problems.
+
+@DPATCH@
+diff -urNad mod-wsgi-experimental~/mod_wsgi.c mod-wsgi-experimental/mod_wsgi.c
+--- mod-wsgi-experimental~/mod_wsgi.c	2007-10-29 23:57:53.000000000 +0100
++++ mod-wsgi-experimental/mod_wsgi.c	2007-10-30 22:15:29.000000000 +0100
+@@ -7063,13 +7063,6 @@
+     if (daemon->group->stack_size) {
+         apr_threadattr_stacksize_set(thread_attr, daemon->group->stack_size);
+     }
+-#if defined(AP_MPM_WANT_SET_STACKSIZE)
+-    else {
+-        if (ap_thread_stacksize != 0) {
+-            apr_threadattr_stacksize_set(thread_attr, ap_thread_stacksize);
+-        }
+-    }
+-#endif
+ 
+     /* Start inactivity thread if required. */
+ 
