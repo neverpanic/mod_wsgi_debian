@@ -5,7 +5,7 @@ Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.
 Uploaders: Bernd Zeimetz <bzed@debian.org>
 Build-Depends: debhelper (>= 5), python-all-dev, apache2-threaded-dev, dpatch
 Homepage: http://www.modwsgi.org/
-Standards-Version: 3.7.2
+Standards-Version: 3.7.3
 Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
 Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/?op=log
 
