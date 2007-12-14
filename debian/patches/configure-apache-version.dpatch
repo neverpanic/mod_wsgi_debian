@@ -4,29 +4,26 @@
 ## DP: we don't want to build-depend on Apache2 to build the package.
 
 @DPATCH@
-diff -urNad mod-wsgi~/configure mod-wsgi/configure
---- mod-wsgi~/configure	2007-07-31 14:13:08.000000000 +0200
-+++ mod-wsgi/configure	2007-08-12 12:55:24.000000000 +0200
-@@ -1385,17 +1385,18 @@
+diff -urNad mod-wsgi-experimental~/configure mod-wsgi-experimental/configure
+--- mod-wsgi-experimental~/configure	2007-12-13 11:26:59.000000000 +0100
++++ mod-wsgi-experimental/configure	2007-12-14 21:04:52.000000000 +0100
+@@ -1677,13 +1677,6 @@
  
  
  
--echo "$as_me:$LINENO: checking Apache version" >&5
--echo $ECHO_N "checking Apache version... $ECHO_C" >&6
+-{ echo "$as_me:$LINENO: checking Apache version" >&5
+-echo $ECHO_N "checking Apache version... $ECHO_C" >&6; }
 -HTTPD="`${APXS} -q SBINDIR`/`${APXS} -q TARGET`"
 -HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
--echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
--echo "${ECHO_T}$HTTPD_VERSION" >&6
-+#echo "$as_me:$LINENO: checking Apache version" >&5
-+#echo $ECHO_N "checking Apache version... $ECHO_C" >&6
-+#HTTPD="`${APXS} -q SBINDIR`/`${APXS} -q TARGET`"
-+#HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
-+#echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
-+#echo "${ECHO_T}$HTTPD_VERSION" >&6
+-{ echo "$as_me:$LINENO: result: $HTTPD_VERSION" >&5
+-echo "${ECHO_T}$HTTPD_VERSION" >&6; }
+-
  
+ # Check whether --with-python was given.
+ if test "${with_python+set}" = set; then
+@@ -1807,7 +1800,7 @@
  LIBEXECDIR="`${APXS} -q LIBEXECDIR`"
  
-+#HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
  
 -HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
 +HTTPD_MAJOR_VERSION=2

@@ -132,19 +132,21 @@ typedef regmatch_t ap_regmatch_t;
 
 #if AP_SERVER_MAJORVERSION_NUMBER >= 2
 #define MOD_WSGI_WITH_BUCKETS 1
+#define MOD_WSGI_WITH_AAA_HANDLERS 1
 #endif
 
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
+static PyTypeObject Auth_Type;
 #if AP_SERVER_MAJORVERSION_NUMBER >= 2
 #if AP_SERVER_MINORVERSION_NUMBER >= 2
 #define MOD_WSGI_WITH_AUTH_PROVIDER 1
+#endif
 #endif
 #endif
 
 #if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
 #include "mod_auth.h"
 #include "ap_provider.h"
-
-static PyTypeObject Auth_Type;
 #endif
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
@@ -215,7 +217,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "2.0c3"
+#define MOD_WSGI_VERSION_STRING "2.0c4"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -239,6 +241,8 @@ static int wsgi_multiprocess = 1;
 static int wsgi_multithread = 1;
 
 /* Daemon information. */
+
+static const char *wsgi_daemon_group = "";
 
 static apr_array_header_t *wsgi_daemon_list = NULL;
 
@@ -264,6 +268,12 @@ typedef struct {
 } WSGIAliasEntry;
 
 typedef struct {
+    const char *handler_script;
+    const char *process_group;
+    const char *application_group;
+} WSGIScriptFile;
+
+typedef struct {
     apr_pool_t *pool;
 
     apr_array_header_t *alias_list;
@@ -286,10 +296,12 @@ typedef struct {
     apr_table_t *restrict_process;
 
     const char *process_group;
-    const char *server_group;
-    const char *dispatch_script;
     const char *application_group;
     const char *callable_object;
+
+    apr_array_header_t *import_list;
+    WSGIScriptFile *dispatch_script;
+    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
@@ -299,6 +311,19 @@ typedef struct {
 } WSGIServerConfig;
 
 static WSGIServerConfig *wsgi_server_config = NULL;
+
+static WSGIScriptFile *newWSGIScriptFile(apr_pool_t *p)
+{
+    WSGIScriptFile *object = NULL;
+
+    object = (WSGIScriptFile *)apr_pcalloc(p, sizeof(WSGIScriptFile));
+
+    object->handler_script = NULL;
+    object->application_group = NULL;
+    object->process_group = NULL;
+
+    return object;
+}
 
 static WSGIServerConfig *newWSGIServerConfig(apr_pool_t *p)
 {
@@ -338,10 +363,12 @@ static WSGIServerConfig *newWSGIServerConfig(apr_pool_t *p)
     object->restrict_process = NULL;
 
     object->process_group = NULL;
-    object->server_group = NULL;
-    object->dispatch_script = NULL;
     object->application_group = NULL;
     object->callable_object = NULL;
+
+    object->import_list = NULL;
+    object->dispatch_script = NULL;
+    object->handler_script = NULL;
 
     object->apache_extensions = -1;
     object->pass_authorization = -1;
@@ -396,16 +423,6 @@ static void *wsgi_merge_server_config(apr_pool_t *p, void *base_conf,
     else
         config->process_group = parent->process_group;
 
-    if (child->server_group)
-        config->server_group = child->server_group;
-    else
-        config->server_group = parent->server_group;
-
-    if (child->dispatch_script)
-        config->dispatch_script = child->dispatch_script;
-    else
-        config->dispatch_script = parent->dispatch_script;
-
     if (child->application_group)
         config->application_group = child->application_group;
     else
@@ -415,6 +432,16 @@ static void *wsgi_merge_server_config(apr_pool_t *p, void *base_conf,
         config->callable_object = child->callable_object;
     else
         config->callable_object = parent->callable_object;
+
+    if (child->dispatch_script)
+        config->dispatch_script = child->dispatch_script;
+    else
+        config->dispatch_script = parent->dispatch_script;
+
+    if (child->handler_script)
+        config->handler_script = child->handler_script;
+    else
+        config->handler_script = parent->handler_script;
 
     if (child->apache_extensions != -1)
         config->apache_extensions = child->apache_extensions;
@@ -450,10 +477,11 @@ typedef struct {
     apr_table_t *restrict_process;
 
     const char *process_group;
-    const char *server_group;
-    const char *dispatch_script;
     const char *application_group;
     const char *callable_object;
+
+    WSGIScriptFile *dispatch_script;
+    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
@@ -461,8 +489,10 @@ typedef struct {
     int reload_mechanism;
     int output_buffering;
 
-    const char *auth_user_script;
-    const char *authz_group_script;
+    WSGIScriptFile *access_script;
+    WSGIScriptFile *auth_user_script;
+    WSGIScriptFile *auth_group_script;
+    int user_authoritative;
     int group_authoritative;
 } WSGIDirectoryConfig;
 
@@ -475,10 +505,11 @@ static WSGIDirectoryConfig *newWSGIDirectoryConfig(apr_pool_t *p)
     object->pool = p;
 
     object->process_group = NULL;
-    object->server_group = NULL;
-    object->dispatch_script = NULL;
     object->application_group = NULL;
     object->callable_object = NULL;
+
+    object->dispatch_script = NULL;
+    object->handler_script = NULL;
 
     object->apache_extensions = -1;
     object->pass_authorization = -1;
@@ -486,8 +517,10 @@ static WSGIDirectoryConfig *newWSGIDirectoryConfig(apr_pool_t *p)
     object->reload_mechanism = -1;
     object->output_buffering = -1;
 
+    object->access_script = NULL;
     object->auth_user_script = NULL;
-    object->authz_group_script = NULL;
+    object->auth_group_script = NULL;
+    object->user_authoritative = -1;
     object->group_authoritative = -1;
 
     return object;
@@ -524,16 +557,6 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
     else
         config->process_group = parent->process_group;
 
-    if (child->server_group)
-        config->server_group = child->server_group;
-    else
-        config->server_group = parent->server_group;
-
-    if (child->dispatch_script)
-        config->dispatch_script = child->dispatch_script;
-    else
-        config->dispatch_script = parent->dispatch_script;
-
     if (child->application_group)
         config->application_group = child->application_group;
     else
@@ -543,6 +566,16 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
         config->callable_object = child->callable_object;
     else
         config->callable_object = parent->callable_object;
+
+    if (child->dispatch_script)
+        config->dispatch_script = child->dispatch_script;
+    else
+        config->dispatch_script = parent->dispatch_script;
+
+    if (child->handler_script)
+        config->handler_script = child->handler_script;
+    else
+        config->handler_script = parent->handler_script;
 
     if (child->apache_extensions != -1)
         config->apache_extensions = child->apache_extensions;
@@ -569,15 +602,25 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
     else
         config->output_buffering = parent->output_buffering;
 
+    if (child->access_script)
+        config->access_script = child->access_script;
+    else
+        config->access_script = parent->access_script;
+
     if (child->auth_user_script)
         config->auth_user_script = child->auth_user_script;
     else
         config->auth_user_script = parent->auth_user_script;
 
-    if (child->authz_group_script)
-        config->authz_group_script = child->authz_group_script;
+    if (child->auth_group_script)
+        config->auth_group_script = child->auth_group_script;
     else
-        config->authz_group_script = parent->authz_group_script;
+        config->auth_group_script = parent->auth_group_script;
+
+    if (child->user_authoritative != -1)
+        config->user_authoritative = child->user_authoritative;
+    else
+        config->user_authoritative = parent->user_authoritative;
 
     if (child->group_authoritative != -1)
         config->group_authoritative = child->group_authoritative;
@@ -593,10 +636,11 @@ typedef struct {
     apr_table_t *restrict_process;
 
     const char *process_group;
-    const char *server_group;
-    const char *dispatch_script;
     const char *application_group;
     const char *callable_object;
+
+    WSGIScriptFile *dispatch_script;
+    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
@@ -604,8 +648,10 @@ typedef struct {
     int reload_mechanism;
     int output_buffering;
 
-    const char *auth_user_script;
-    const char *authz_group_script;
+    WSGIScriptFile *access_script;
+    WSGIScriptFile *auth_user_script;
+    WSGIScriptFile *auth_group_script;
+    int user_authoritative;
     int group_authoritative;
 } WSGIRequestConfig;
 
@@ -858,6 +904,53 @@ static const char *wsgi_callable_object(request_rec *r, const char *s)
     return "application";
 }
 
+static const char *wsgi_handler_script(request_rec *r, const char *s)
+{
+    const char *name = NULL;
+    const char *value = NULL;
+
+    if (!s)
+        return "";
+
+    if (*s != '%')
+        return s;
+
+    name = s + 1;
+
+    if (*name) {
+        if (!strcmp(name, "{RESOURCE}"))
+            return "";
+
+        if (strstr(name, "{ENV:") == name) {
+            int len = 0;
+
+            name = name + 5;
+            len = strlen(name);
+
+            if (len && name[len-1] == '}') {
+                name = apr_pstrndup(r->pool, name, len-1);
+
+                value = apr_table_get(r->notes, name);
+
+                if (!value)
+                    value = apr_table_get(r->subprocess_env, name);
+
+                if (!value)
+                    value = getenv(name);
+
+                if (value) {
+                    if (*value == '%' && strstr(value, "%{ENV:") != value)
+                        return wsgi_handler_script(r, value);
+
+                    return value;
+                }
+            }
+        }
+    }
+
+    return s;
+}
+
 static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
 {
     WSGIRequestConfig *config = NULL;
@@ -883,19 +976,6 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
 
     config->process_group = wsgi_process_group(r, config->process_group);
 
-    config->server_group = dconfig->server_group;
-
-    if (!config->server_group)
-        config->server_group = sconfig->server_group;
-
-    config->server_group = wsgi_server_group(r,
-            config->server_group);
-
-    config->dispatch_script = dconfig->dispatch_script;
-
-    if (!config->dispatch_script)
-        config->dispatch_script = sconfig->dispatch_script;
-
     config->application_group = dconfig->application_group;
 
     if (!config->application_group)
@@ -910,6 +990,18 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
         config->callable_object = sconfig->callable_object;
 
     config->callable_object = wsgi_callable_object(r, config->callable_object);
+
+    config->dispatch_script = dconfig->dispatch_script;
+
+    if (!config->dispatch_script)
+        config->dispatch_script = sconfig->dispatch_script;
+
+    config->handler_script = dconfig->handler_script;
+
+    if (!config->handler_script)
+        config->handler_script = sconfig->handler_script;
+
+    config->handler_script = wsgi_handler_script(r, config->handler_script);
 
     config->apache_extensions = dconfig->apache_extensions;
 
@@ -951,9 +1043,16 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
             config->output_buffering = 0;
     }
 
+    config->access_script = dconfig->access_script;
+
     config->auth_user_script = dconfig->auth_user_script;
 
-    config->authz_group_script = dconfig->authz_group_script;
+    config->auth_group_script = dconfig->auth_group_script;
+
+    config->user_authoritative = dconfig->user_authoritative;
+
+    if (config->user_authoritative == -1)
+        config->user_authoritative = 1;
 
     config->group_authoritative = dconfig->group_authoritative;
 
@@ -1263,7 +1362,8 @@ static PyTypeObject Log_Type = {
     0,                      /*tp_is_gc*/
 };
 
-static void wsgi_log_python_error(request_rec *r, LogObject *log)
+static void wsgi_log_python_error(request_rec *r, LogObject *log,
+                                  const char *filename)
 {
     PyObject *m = NULL;
     PyObject *result = NULL;
@@ -1277,16 +1377,30 @@ static void wsgi_log_python_error(request_rec *r, LogObject *log)
 
     if (PyErr_ExceptionMatches(PyExc_SystemExit)) {
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
-                      "mod_wsgi (pid=%d): SystemExit exception raised by "
-                      "WSGI script '%s' ignored.", getpid(), r->filename);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d): SystemExit exception raised by "
+                          "WSGI script '%s' ignored.", getpid(), filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                          "mod_wsgi (pid=%d): SystemExit exception raised by "
+                          "WSGI script '%s' ignored.", getpid(), filename);
+        }
         Py_END_ALLOW_THREADS
     }
     else {
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
-                      "mod_wsgi (pid=%d): Exception occurred processing "
-                      "WSGI script '%s'.", getpid(), r->filename);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d): Exception occurred processing "
+                          "WSGI script '%s'.", getpid(), filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                          "mod_wsgi (pid=%d): Exception occurred processing "
+                          "WSGI script '%s'.", getpid(), filename);
+        }
         Py_END_ALLOW_THREADS
     }
 
@@ -2570,7 +2684,7 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
             if (self->status_line)
                 result = OK;
 
-            wsgi_log_python_error(self->r, self->log);
+            wsgi_log_python_error(self->r, self->log, self->r->filename);
         }
 
         if (PyObject_HasAttrString(self->sequence, "close")) {
@@ -2588,7 +2702,7 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
         }
 
         if (PyErr_Occurred())
-            wsgi_log_python_error(self->r, self->log);
+            wsgi_log_python_error(self->r, self->log, self->r->filename);
 
         Py_DECREF(self->sequence);
 
@@ -2600,7 +2714,7 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
     Py_DECREF(vars);
 
     if (PyErr_Occurred())
-        wsgi_log_python_error(self->r, self->log);
+        wsgi_log_python_error(self->r, self->log, self->r->filename);
 
     /*
      * If result indicates an internal server error, then
@@ -3286,8 +3400,6 @@ static InterpreterObject *newInterpreterObject(const char *name,
     }
 
     if (!module) {
-        PyObject *inner;
-
         module = PyImport_AddModule("apache");
 
         Py_INCREF(module);
@@ -3941,8 +4053,9 @@ static void wsgi_release_interpreter(InterpreterObject *handle)
  * Code for importing a module from source by absolute path.
  */
 
-static PyObject *wsgi_load_source(request_rec *r, const char *name,
-                                  int exists, const char* filename,
+static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
+                                  const char *name, int exists,
+                                  const char* filename,
                                   const char *process_group,
                                   const char *application_group)
 {
@@ -3950,59 +4063,78 @@ static PyObject *wsgi_load_source(request_rec *r, const char *name,
     PyObject *m = NULL;
     PyObject *co = NULL;
     struct _node *n = NULL;
-    const char *path;
-
-    path = filename;
-    if (!path)
-        path = r->filename;
 
     if (exists) {
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_INFO(0), r,
-                      "mod_wsgi (pid=%d, process='%s', application='%s'): "
-                      "Reloading WSGI script '%s'.", getpid(),
-                      process_group, application_group, path);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_INFO(0), r,
+                          "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                          "Reloading WSGI script '%s'.", getpid(),
+                          process_group, application_group, filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
+                         "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                         "Reloading WSGI script '%s'.", getpid(),
+                         process_group, application_group, filename);
+        }
         Py_END_ALLOW_THREADS
     }
     else {
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_INFO(0), r,
-                      "mod_wsgi (pid=%d, process='%s', application='%s'): "
-                      "Loading WSGI script '%s'.", getpid(),
-                      process_group, application_group, path);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_INFO(0), r,
+                          "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                          "Loading WSGI script '%s'.", getpid(),
+                          process_group, application_group, filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
+                         "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                         "Loading WSGI script '%s'.", getpid(),
+                         process_group, application_group, filename);
+        }
         Py_END_ALLOW_THREADS
     }
 
-    if (!(fp = fopen(path, "r"))) {
+    if (!(fp = fopen(filename, "r"))) {
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(errno), r,
-                      "mod_wsgi (pid=%d, process='%s', application='%s'): "
-                      "Call to fopen() failed for '%s'.", getpid(),
-                      process_group, application_group, path);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(errno), r,
+                          "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                          "Call to fopen() failed for '%s'.", getpid(),
+                          process_group, application_group, filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(errno), wsgi_server,
+                         "mod_wsgi (pid=%d, process='%s', application='%s'): "
+                         "Call to fopen() failed for '%s'.", getpid(),
+                         process_group, application_group, filename);
+        }
         Py_END_ALLOW_THREADS
         PyErr_SetFromErrno(PyExc_IOError);
         return NULL;
     }
 
-    n = PyParser_SimpleParseFile(fp, path, Py_file_input);
+    n = PyParser_SimpleParseFile(fp, filename, Py_file_input);
 
     fclose(fp);
 
     if (!n)
         return NULL;
 
-    co = (PyObject *)PyNode_Compile(n, path);
+    co = (PyObject *)PyNode_Compile(n, filename);
     PyNode_Free(n);
 
     if (co)
-        m = PyImport_ExecCodeModuleEx((char *)name, co, (char *)path);
+        m = PyImport_ExecCodeModuleEx((char *)name, co, (char *)filename);
 
     Py_XDECREF(co);
 
     if (m) {
         PyObject *object = NULL;
 
-        if (filename) {
+        if (!r || strcmp(r->filename, filename)) {
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
             struct stat finfo;
             if (stat(filename, &finfo) == -1) {
@@ -4014,7 +4146,7 @@ static PyObject *wsgi_load_source(request_rec *r, const char *name,
 #else
             apr_finfo_t finfo;
             if (apr_stat(&finfo, filename, APR_FINFO_SIZE,
-                         r->pool) != APR_SUCCESS) {
+                         pool) != APR_SUCCESS) {
                 object = PyLong_FromLongLong(0);
             }
             else {
@@ -4035,21 +4167,28 @@ static PyObject *wsgi_load_source(request_rec *r, const char *name,
         LogObject *log;
 
         Py_BEGIN_ALLOW_THREADS
-        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
-                      "mod_wsgi (pid=%d): Target WSGI script '%s' cannot "
-                      "be loaded as Python module.", getpid(), path);
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d): Target WSGI script '%s' cannot "
+                          "be loaded as Python module.", getpid(), filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                         "mod_wsgi (pid=%d): Target WSGI script '%s' cannot "
+                         "be loaded as Python module.", getpid(), filename);
+        }
         Py_END_ALLOW_THREADS
 
         log = newLogObject(r, APLOG_ERR);
-        wsgi_log_python_error(r, log);
+        wsgi_log_python_error(r, log, filename);
         Py_DECREF(log);
     }
 
     return m;
 }
 
-static int wsgi_reload_required(request_rec *r, const char *filename,
-                                PyObject *module)
+static int wsgi_reload_required(apr_pool_t *pool, request_rec *r,
+                                const char *filename, PyObject *module)
 {
     PyObject *dict = NULL;
     PyObject *object = NULL;
@@ -4061,7 +4200,7 @@ static int wsgi_reload_required(request_rec *r, const char *filename,
     if (object) {
         mtime = PyLong_AsLongLong(object);
 
-        if (filename) {
+        if (!r || strcmp(r->filename, filename)) {
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
             struct stat finfo;
             if (stat(filename, &finfo) == -1) {
@@ -4073,7 +4212,7 @@ static int wsgi_reload_required(request_rec *r, const char *filename,
 #else
             apr_finfo_t finfo;
             if (apr_stat(&finfo, filename, APR_FINFO_SIZE,
-                         r->pool) != APR_SUCCESS) {
+                         pool) != APR_SUCCESS) {
                 return 1;
             }
             else if (mtime != finfo.mtime) {
@@ -4097,7 +4236,7 @@ static int wsgi_reload_required(request_rec *r, const char *filename,
     return 0;
 }
 
-static char *wsgi_module_name(request_rec *r, const char *filename)
+static char *wsgi_module_name(apr_pool_t *pool, const char *filename)
 {
     char *hash = NULL;
     char *file = NULL;
@@ -4108,19 +4247,19 @@ static char *wsgi_module_name(request_rec *r, const char *filename)
      * same basename are still considered unique. Note that where
      * we believe a case insensitive file system is being used,
      * we always change the file name to lower case so that use
-     * of different case in name doesn't resultant in duplicate
+     * of different case in name doesn't result in duplicate
      * modules being loaded for the same file.
      */
 
     file = (char *)filename;
 
     if (wsgi_server_config->case_sensitivity) {
-        file = apr_pstrdup(r->pool, file);
+        file = apr_pstrdup(pool, file);
         ap_str_tolower(file);
     }
 
-    hash = ap_md5(r->pool, (const unsigned char *)file);
-    return apr_pstrcat(r->pool, "_mod_wsgi_", hash, NULL);
+    hash = ap_md5(pool, (const unsigned char *)file);
+    return apr_pstrcat(pool, "_mod_wsgi_", hash, NULL);
 }
 
 static int wsgi_execute_script(request_rec *r)
@@ -4130,7 +4269,8 @@ static int wsgi_execute_script(request_rec *r)
     InterpreterObject *interp = NULL;
     PyObject *modules = NULL;
     PyObject *module = NULL;
-    char *name = NULL;
+    const char *script = NULL;
+    const char *name = NULL;
     int exists = 0;
 
     int status;
@@ -4157,7 +4297,12 @@ static int wsgi_execute_script(request_rec *r)
 
     /* Calculate the Python module name to be used for script. */
 
-    name = wsgi_module_name(r, r->filename);
+    if (config->handler_script && *config->handler_script)
+        script = config->handler_script;
+    else
+        script = r->filename;
+
+    name = wsgi_module_name(r->pool, script);
 
     /*
      * Use a lock around the check to see if the module is
@@ -4187,7 +4332,7 @@ static int wsgi_execute_script(request_rec *r)
      */
 
     if (module && config->script_reloading) {
-        if (wsgi_reload_required(r, NULL, module)) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
             /*
              * Script file has changed. Discard reference to
              * loaded module and work out what action we are
@@ -4317,7 +4462,8 @@ static int wsgi_execute_script(request_rec *r)
     /* Load module if not already loaded. */
 
     if (!module) {
-        module = wsgi_load_source(r, name, exists, NULL, config->process_group,
+        module = wsgi_load_source(r->pool, r, name, exists, script,
+                                  config->process_group,
                                   config->application_group);
     }
 
@@ -4402,7 +4548,7 @@ static int wsgi_execute_script(request_rec *r)
     if (PyErr_Occurred()) {
         LogObject *log;
         log = newLogObject(r, APLOG_ERR);
-        wsgi_log_python_error(r, log);
+        wsgi_log_python_error(r, log, r->filename);
         Py_DECREF(log);
     }
 
@@ -4530,7 +4676,7 @@ static void wsgi_python_child_init(apr_pool_t *p)
     PyType_Ready(&Interpreter_Type);
     PyType_Ready(&Dispatch_Type);
 
-#if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
     PyType_Ready(&Auth_Type);
 #endif
 
@@ -4573,6 +4719,112 @@ static void wsgi_python_child_init(apr_pool_t *p)
     apr_pool_cleanup_register(p, NULL, wsgi_python_child_cleanup,
                               apr_pool_cleanup_null);
 #endif
+
+    /* Loop through import scripts for this process and load them. */
+
+    if (wsgi_server_config->import_list) {
+        apr_array_header_t *scripts = NULL;
+
+        WSGIScriptFile *entries;
+        WSGIScriptFile *entry;
+
+        int i;
+
+        scripts = wsgi_server_config->import_list;
+        entries = (WSGIScriptFile *)scripts->elts;
+
+        for (i = 0; i < scripts->nelts; ++i) {
+            int l = 0;
+
+            entry = &entries[i];
+
+            if (!strcmp(wsgi_daemon_group, entry->process_group)) {
+                InterpreterObject *interp = NULL;
+                PyObject *modules = NULL;
+                PyObject *module = NULL;
+                char *name = NULL;
+                int exists = 0;
+
+                interp = wsgi_acquire_interpreter(entry->application_group);
+
+                if (!interp) {
+                    ap_log_error(APLOG_MARK, WSGI_LOG_CRIT(0), wsgi_server,
+                                  "mod_wsgi (pid=%d): Cannot acquire "
+                                  "interpreter '%s'.", getpid(),
+                                  entry->application_group);
+                }
+
+                /* Calculate the Python module name to be used for script. */
+
+                name = wsgi_module_name(p, entry->handler_script);
+
+                /*
+                 * Use a lock around the check to see if the module is
+                 * already loaded and the import of the module. Strictly
+                 * speaking shouldn't be required at this point.
+                 */
+
+#if APR_HAS_THREADS
+                Py_BEGIN_ALLOW_THREADS
+                apr_thread_mutex_lock(wsgi_module_lock);
+                Py_END_ALLOW_THREADS
+#endif
+
+                modules = PyImport_GetModuleDict();
+                module = PyDict_GetItemString(modules, name);
+
+                Py_XINCREF(module);
+
+                if (module)
+                    exists = 1;
+
+                /*
+                 * If script reloading is enabled and the module for it has
+                 * previously been loaded, see if it has been modified since
+                 * the last time it was accessed.
+                 */
+
+                if (module && wsgi_server_config->script_reloading) {
+                    if (wsgi_reload_required(p, NULL, entry->handler_script,
+                                             module)) {
+                        /*
+                         * Script file has changed. Only support module
+                         * reloading for dispatch scripts. Remove the
+                         * module from the modules dictionary before
+                         * reloading it again. If code is executing within
+                         * the module at the time, the callers reference
+                         * count on the module should ensure it isn't
+                         * actually destroyed until it is finished.
+                         */
+
+                        Py_DECREF(module);
+                        module = NULL;
+
+                        PyDict_DelItemString(modules, name);
+                    }
+                }
+
+                if (!module) {
+                    module = wsgi_load_source(p, NULL, name, exists,
+                                              entry->handler_script,
+                                              entry->process_group,
+                                              entry->application_group);
+                }
+
+                /* Safe now to release the module lock. */
+
+#if APR_HAS_THREADS
+                apr_thread_mutex_unlock(wsgi_module_lock);
+#endif
+
+                /* Cleanup and release interpreter, */
+
+                Py_XDECREF(module);
+
+                wsgi_release_interpreter(interp);
+            }
+        }
+    }
 }
 
 /* The processors for directives. */
@@ -4859,37 +5111,136 @@ static const char *wsgi_set_callable_object(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
-static const char *wsgi_set_server_group(cmd_parms *cmd, void *mconfig,
-                                         const char *n)
+static const char *wsgi_add_import_script(cmd_parms *cmd, void *mconfig,
+                                          const char *args)
 {
-    if (cmd->path) {
-        WSGIDirectoryConfig *dconfig = NULL;
-        dconfig = (WSGIDirectoryConfig *)mconfig;
-        dconfig->server_group = n;
+    const char *error = NULL;
+    WSGIScriptFile *object = NULL;
+    WSGIServerConfig *sconfig = NULL;
+
+    const char *option = NULL;
+    const char *value = NULL;
+
+    error = ap_check_cmd_context(cmd, GLOBAL_ONLY);
+    if (error != NULL)
+        return error;
+
+    sconfig = ap_get_module_config(cmd->server->module_config,
+                                   &wsgi_module);
+
+    if (!sconfig->import_list) {
+        sconfig->import_list = apr_array_make(sconfig->pool, 20,
+                                              sizeof(WSGIScriptFile));
     }
-    else {
-        WSGIServerConfig *sconfig = NULL;
-        sconfig = ap_get_module_config(cmd->server->module_config,
-                                       &wsgi_module);
-        sconfig->server_group = n;
+
+    object = (WSGIScriptFile *)apr_array_push(sconfig->import_list);
+
+    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->process_group = NULL;
+    object->application_group = NULL;
+
+    if (!object->handler_script || !*object->handler_script)
+        return "Location of import script not supplied.";
+
+    while (*args) {
+        option = ap_getword_conf(cmd->temp_pool, &args);
+
+        if (strstr(option, "application-group=") == option) {
+            value = option + 18;
+            if (!*value)
+                return "Invalid name for WSGI application group.";
+
+            object->application_group = value;
+        }
+#if defined(MOD_WSGI_WITH_DAEMONS)
+        else if (strstr(option, "process-group=") == option) {
+            value = option + 14;
+            if (!*value)
+                return "Invalid name for WSGI process group.";
+
+            object->process_group = value;
+        }
+#endif
+        else
+            return "Invalid option to WSGI import script definition.";
     }
+
+    if (!object->application_group)
+        return "Name of WSGI application group required.";
+
+    if (!strcmp(object->application_group, "%{GLOBAL}"))
+        object->application_group = "";
+
+#if defined(MOD_WSGI_WITH_DAEMONS)
+    if (!object->process_group)
+        return "Name of WSGI process group required.";
+
+    if (!strcmp(object->process_group, "%{GLOBAL}"))
+        object->process_group = "";
+#else
+    object->process_group = "";
+#endif
 
     return NULL;
 }
 
 static const char *wsgi_set_dispatch_script(cmd_parms *cmd, void *mconfig,
-                                            const char *n)
+                                            const char *args)
 {
+    WSGIScriptFile *object = NULL;
+
+    const char *option = NULL;
+    const char *value = NULL;
+
+    object = newWSGIScriptFile(cmd->pool);
+
+    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+
+    if (!object->handler_script || !*object->handler_script)
+        return "Location of dispatch script not supplied.";
+
+    while (*args) {
+        option = ap_getword_conf(cmd->temp_pool, &args);
+
+        if (strstr(option, "application-group=") == option) {
+            value = option + 18;
+            if (!*value)
+                return "Invalid name for WSGI application group.";
+
+            object->application_group = value;
+        }
+        else
+            return "Invalid option to WSGI dispatch script definition.";
+    }
+
     if (cmd->path) {
         WSGIDirectoryConfig *dconfig = NULL;
         dconfig = (WSGIDirectoryConfig *)mconfig;
-        dconfig->dispatch_script = n;
+        dconfig->dispatch_script = object;
     }
     else {
         WSGIServerConfig *sconfig = NULL;
         sconfig = ap_get_module_config(cmd->server->module_config,
                                        &wsgi_module);
-        sconfig->dispatch_script = n;
+        sconfig->dispatch_script = object;
+    }
+
+    return NULL;
+}
+
+static const char *wsgi_set_handler_script(cmd_parms *cmd, void *mconfig,
+                                           const char *n)
+{
+    if (cmd->path) {
+        WSGIDirectoryConfig *dconfig = NULL;
+        dconfig = (WSGIDirectoryConfig *)mconfig;
+        dconfig->handler_script = n;
+    }
+    else {
+        WSGIServerConfig *sconfig = NULL;
+        sconfig = ap_get_module_config(cmd->server->module_config,
+                                       &wsgi_module);
+        sconfig->handler_script = n;
     }
 
     return NULL;
@@ -5049,22 +5400,126 @@ static const char *wsgi_set_output_buffering(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
-static const char *wsgi_set_auth_user_script(cmd_parms *cmd, void *mconfig,
-                                             const char *n)
+static const char *wsgi_set_access_script(cmd_parms *cmd, void *mconfig,
+                                          const char *args)
 {
     WSGIDirectoryConfig *dconfig = NULL;
+    WSGIScriptFile *object = NULL;
+
+    const char *option = NULL;
+    const char *value = NULL;
+
+    object = newWSGIScriptFile(cmd->pool);
+
+    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+
+    if (!object->handler_script || !*object->handler_script)
+        return "Location of access script not supplied.";
+
+    while (*args) {
+        option = ap_getword_conf(cmd->temp_pool, &args);
+
+        if (strstr(option, "application-group=") == option) {
+            value = option + 18;
+            if (!*value)
+                return "Invalid name for WSGI application group.";
+
+            object->application_group = value;
+        }
+        else
+            return "Invalid option to WSGI access script definition.";
+    }
+
     dconfig = (WSGIDirectoryConfig *)mconfig;
-    dconfig->auth_user_script = n;
+    dconfig->access_script = object;
+
+    return NULL;
+}
+
+static const char *wsgi_set_auth_user_script(cmd_parms *cmd, void *mconfig,
+                                             const char *args)
+{
+    WSGIDirectoryConfig *dconfig = NULL;
+    WSGIScriptFile *object = NULL;
+
+    const char *option = NULL;
+    const char *value = NULL;
+
+    object = newWSGIScriptFile(cmd->pool);
+
+    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+
+    if (!object->handler_script || !*object->handler_script)
+        return "Location of auth user script not supplied.";
+
+    while (*args) {
+        option = ap_getword_conf(cmd->temp_pool, &args);
+
+        if (strstr(option, "application-group=") == option) {
+            value = option + 18;
+            if (!*value)
+                return "Invalid name for WSGI application group.";
+
+            object->application_group = value;
+        }
+        else
+            return "Invalid option to WSGI auth user script definition.";
+    }
+
+    dconfig = (WSGIDirectoryConfig *)mconfig;
+    dconfig->auth_user_script = object;
 
     return NULL;
 }
 
 static const char *wsgi_set_auth_group_script(cmd_parms *cmd, void *mconfig,
-                                               const char *n)
+                                               const char *args)
+{
+    WSGIDirectoryConfig *dconfig = NULL;
+    WSGIScriptFile *object = NULL;
+
+    const char *option = NULL;
+    const char *value = NULL;
+
+    object = newWSGIScriptFile(cmd->pool);
+
+    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+
+    if (!object->handler_script || !*object->handler_script)
+        return "Location of auth group script not supplied.";
+
+    while (*args) {
+        option = ap_getword_conf(cmd->temp_pool, &args);
+
+        if (strstr(option, "application-group=") == option) {
+            value = option + 18;
+            if (!*value)
+                return "Invalid name for WSGI application group.";
+
+            object->application_group = value;
+        }
+        else
+            return "Invalid option to WSGI auth group script definition.";
+    }
+
+    dconfig = (WSGIDirectoryConfig *)mconfig;
+    dconfig->auth_group_script = object;
+
+    return NULL;
+}
+
+static const char *wsgi_set_user_authoritative(cmd_parms *cmd, void *mconfig,
+                                               const char *f)
 {
     WSGIDirectoryConfig *dconfig = NULL;
     dconfig = (WSGIDirectoryConfig *)mconfig;
-    dconfig->authz_group_script = n;
+
+    if (strcasecmp(f, "Off") == 0)
+        dconfig->user_authoritative = 0;
+    else if (strcasecmp(f, "On") == 0)
+        dconfig->user_authoritative = 1;
+    else
+        return "WSGIUserAuthoritative must be one of: Off | On";
 
     return NULL;
 }
@@ -5317,6 +5772,9 @@ static void wsgi_build_environment(request_rec *r)
     apr_table_setn(r->subprocess_env, "mod_wsgi.callable_object",
                    config->callable_object);
 
+    apr_table_setn(r->subprocess_env, "mod_wsgi.handler_script",
+                   config->handler_script);
+
     apr_table_setn(r->subprocess_env, "mod_wsgi.script_reloading",
                    apr_psprintf(r->pool, "%d", config->script_reloading));
     apr_table_setn(r->subprocess_env, "mod_wsgi.reload_mechanism",
@@ -5364,7 +5822,7 @@ static void Dispatch_dealloc(DispatchObject *self)
     PyObject_Del(self);
 }
 
-static PyObject *Dispatch_environ(DispatchObject *self)
+static PyObject *Dispatch_environ(DispatchObject *self, const char *group)
 {
     request_rec *r = NULL;
 
@@ -5399,9 +5857,22 @@ static PyObject *Dispatch_environ(DispatchObject *self)
         }
     }
 
-    object = PyString_FromString(self->config->server_group);
-    PyDict_SetItemString(vars, "mod_wsgi.server_group", object);
+    /*
+     * Need to override process and application group as they
+     * are set to the default target, where as we need to set
+     * them to context dispatch script is run in. Also need
+     * to remove callable object reference.
+     */
+
+    object = PyString_FromString("");
+    PyDict_SetItemString(vars, "mod_wsgi.process_group", object);
     Py_DECREF(object);
+
+    object = PyString_FromString(group);
+    PyDict_SetItemString(vars, "mod_wsgi.application_group", object);
+    Py_DECREF(object);
+
+    PyDict_DelItemString(vars, "mod_wsgi.callable_object");
 
     /*
      * Setup log object for WSGI errors. Don't decrement
@@ -5482,7 +5953,8 @@ static int wsgi_execute_dispatch(request_rec *r)
     char *name = NULL;
     int exists = 0;
 
-    const char *group;
+    const char *script = NULL;
+    const char *group = NULL;
 
     int status;
 
@@ -5504,7 +5976,8 @@ static int wsgi_execute_dispatch(request_rec *r)
      * it is safe to start manipulating python objects.
      */
 
-    group = wsgi_server_group(r, config->server_group);
+    script = config->dispatch_script->handler_script;
+    group = wsgi_server_group(r, config->dispatch_script->application_group);
 
     interp = wsgi_acquire_interpreter(group);
 
@@ -5518,7 +5991,7 @@ static int wsgi_execute_dispatch(request_rec *r)
 
     /* Calculate the Python module name to be used for script. */
 
-    name = wsgi_module_name(r, config->dispatch_script);
+    name = wsgi_module_name(r->pool, script);
 
     /*
      * Use a lock around the check to see if the module is
@@ -5548,7 +6021,7 @@ static int wsgi_execute_dispatch(request_rec *r)
      */
 
     if (module && config->script_reloading) {
-        if (wsgi_reload_required(r, config->dispatch_script, module)) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
             /*
              * Script file has changed. Only support module
              * reloading for dispatch scripts. Remove the
@@ -5567,8 +6040,7 @@ static int wsgi_execute_dispatch(request_rec *r)
     }
 
     if (!module) {
-        module = wsgi_load_source(r, name, exists, config->dispatch_script,
-                                  "", group);
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
     }
 
     /* Safe now to release the module lock. */
@@ -5596,7 +6068,7 @@ static int wsgi_execute_dispatch(request_rec *r)
             PyObject *vars = NULL;
             PyObject *args = NULL;
 
-            vars = Dispatch_environ(adapter);
+            vars = Dispatch_environ(adapter, group);
 
             /* First check process_group(). */
 
@@ -5746,6 +6218,55 @@ static int wsgi_execute_dispatch(request_rec *r)
                 object = NULL;
             }
 
+            /* Now check handler_script(). */
+
+            if (status == OK)
+                object = PyDict_GetItemString(module_dict, "handler_script");
+
+            if (object) {
+                PyObject *result = NULL;
+
+                if (adapter) {
+                    Py_INCREF(object);
+                    args = Py_BuildValue("(O)", vars);
+                    result = PyEval_CallObject(object, args);
+                    Py_DECREF(args);
+                    Py_DECREF(object);
+
+                    if (result) {
+                        if (result != Py_None) {
+                            if (PyString_Check(result)) {
+                                const char *s;
+
+                                s = PyString_AsString(result);
+                                s = apr_pstrdup(r->pool, s);
+                                s = wsgi_callable_object(r, s);
+                                config->handler_script = s;
+
+                                apr_table_setn(r->subprocess_env,
+                                               "mod_wsgi.handler_script",
+                                               config->handler_script);
+                            }
+                            else {
+                                PyErr_SetString(PyExc_TypeError, "Handler "
+                                                "script must be a string "
+                                                "object");
+
+                                status = HTTP_INTERNAL_SERVER_ERROR;
+                            }
+                        }
+
+                        Py_DECREF(result);
+                    }
+                    else
+                        status = HTTP_INTERNAL_SERVER_ERROR;
+                }
+                else
+                    Py_DECREF(object);
+
+                object = NULL;
+            }
+
             /*
              * Wipe out references to Apache request object
              * held by Python objects, so can detect when an
@@ -5779,7 +6300,7 @@ static int wsgi_execute_dispatch(request_rec *r)
             if (PyErr_Occurred()) {
                 LogObject *log;
                 log = newLogObject(r, APLOG_ERR);
-                wsgi_log_python_error(r, log);
+                wsgi_log_python_error(r, log, script);
                 Py_DECREF(log);
             }
 
@@ -6043,15 +6564,17 @@ static const command_rec wsgi_commands[] =
     { "WSGICaseSensitivity", wsgi_set_case_sensitivity, NULL,
         RSRC_CONF, TAKE1, "Define whether file system is case sensitive." },
 
-    { "WSGIServerGroup", wsgi_set_server_group, NULL,
-        ACCESS_CONF|RSRC_CONF, TAKE1, "Server interpreter group." },
-    { "WSGIDispatchScript", wsgi_set_dispatch_script, NULL,
-        ACCESS_CONF|RSRC_CONF, TAKE1, "Location of WSGI dispatch script." },
-
     { "WSGIApplicationGroup", wsgi_set_application_group, NULL,
         ACCESS_CONF|RSRC_CONF, TAKE1, "Application interpreter group." },
     { "WSGICallableObject", wsgi_set_callable_object, NULL,
         OR_FILEINFO, TAKE1, "Name of entry point in WSGI script file." },
+
+    { "WSGIImportScript", wsgi_add_import_script, NULL,
+        RSRC_CONF, RAW_ARGS, "Location of WSGI import script." },
+    { "WSGIDispatchScript", wsgi_set_dispatch_script, NULL,
+        ACCESS_CONF|RSRC_CONF, RAW_ARGS, "Location of WSGI dispatch script." },
+    { "WSGIHandlerScript", wsgi_set_handler_script, NULL,
+        ACCESS_CONF|RSRC_CONF, TAKE1, "Location of WSGI handler script." },
 
     { "WSGIApacheExtensions", wsgi_set_apache_extensions, NULL,
         ACCESS_CONF|RSRC_CONF, TAKE1, "Enable/Disable Apache extensions." },
@@ -6806,7 +7329,7 @@ static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
     c->conn_config = ap_create_conn_config(p);
     c->notes = apr_table_make(p, 5);
     c->pool = p;
-    
+
     if ((rv = apr_socket_addr_get(&c->local_addr, APR_LOCAL, sock))
         != APR_SUCCESS) {
         ap_log_error(APLOG_MARK, WSGI_LOG_INFO(rv), wsgi_server,
@@ -6840,12 +7363,12 @@ static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
                       "mod_wsgi (pid=%d): Failed call "
                       "apr_socket_timeout_set().", getpid());
     }
-    
+
     net->c = c;
     net->in_ctx = NULL;
     net->out_ctx = NULL;
     net->client_socket = sock;
-                      
+
     ap_set_module_config(net->c->conn_config, &core_module, sock);
     ap_add_input_filter_handle(ap_core_input_filter_handle,
                                net, NULL, net->c);
@@ -7138,6 +7661,13 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
                  "mod_wsgi (pid=%d): Enable monitor thread in "
                  "process '%s'.", getpid(), daemon->group->name);
 
+    ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
+                 "mod_wsgi (pid=%d): Deadlock timeout is %d.",
+                 getpid(), (int)(apr_time_sec(wsgi_deadlock_timeout)));
+    ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
+                 "mod_wsgi (pid=%d): Inactivity timeout is %d.",
+                 getpid(), (int)(apr_time_sec(wsgi_inactivity_timeout)));
+
     while (1) {
         apr_time_t now;
 
@@ -7146,7 +7676,7 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
 
         int restart = 0;
 
-        apr_interval_time_t period = apr_time_from_sec(1.0);
+        apr_interval_time_t period = 0;
 
         now = apr_time_now();
 
@@ -7155,8 +7685,8 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
         inactivity_time = wsgi_inactivity_shutdown_time;
         apr_thread_mutex_unlock(wsgi_shutdown_lock);
 
-        if (wsgi_deadlock_timeout) {
-            if (deadlock_time && deadlock_time <= now) {
+        if (wsgi_deadlock_timeout && deadlock_time) {
+            if (deadlock_time <= now) {
                 ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
                              "mod_wsgi (pid=%d): Daemon process deadlock "
                              "timer expired, stopping process '%s'.",
@@ -7171,8 +7701,8 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
             }
         }
 
-        if (wsgi_inactivity_timeout) {
-            if (inactivity_time && inactivity_time <= now) {
+        if (!restart && wsgi_inactivity_timeout && inactivity_time) {
+            if (inactivity_time <= now) {
                 ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
                              "mod_wsgi (pid=%d): Daemon process inactivity "
                              "timer expired, stopping process '%s'.",
@@ -7180,7 +7710,7 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
 
                 restart = 1;
 
-                if (!period || wsgi_inactivity_timeout < period)
+                if (!period || (wsgi_inactivity_timeout < period))
                     period = wsgi_inactivity_timeout;
             }
             else {
@@ -7193,6 +7723,9 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
             wsgi_daemon_shutdown++;
             kill(getpid(), SIGINT);
         }
+
+        if (period <= 0)
+            period = apr_time_from_sec(1.0);
 
         apr_sleep(period);
     }
@@ -7511,6 +8044,20 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
         }
 
         /*
+         * Update reference to server object in case daemon
+         * process is actually associated with a virtual host.
+         * This way all logging actually goes into the virtual
+         * hosts log file.
+         */
+
+        wsgi_server = daemon->group->server;
+
+        /* Retain a reference to daemon process details. */
+
+        wsgi_daemon_group = daemon->group->name;
+        wsgi_daemon_process = daemon;
+
+        /*
          * Setup Python in the child daemon process. Note that
          * we ensure that we are now marked as the original
          * initialiser of the Python interpreter even though
@@ -7524,19 +8071,6 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
         wsgi_python_path = daemon->group->python_path;
         wsgi_python_eggs = daemon->group->python_eggs;
         wsgi_python_child_init(wsgi_daemon_pool);
-
-        /*
-         * Update reference to server object in case daemon
-         * process is actually associated with a virtual host.
-         * This way all logging actually goes into the virtual
-         * hosts log file.
-         */
-
-        wsgi_server = daemon->group->server;
-
-        /* Retain a reference to daemon process details. */
-
-        wsgi_daemon_process = daemon;
 
         /*
          * Create socket wrapper for listener file descriptor
@@ -7973,8 +8507,9 @@ static int wsgi_execute_remote(request_rec *r)
      * be trusted.
      */
 
-    hash = apr_psprintf(r->pool, "%ld|%s|%s", group->random,
-                        group->socket, r->filename);
+    hash = apr_psprintf(r->pool, "%ld|%s|%s|%s", group->random,
+                        group->socket, r->filename,
+                        config->handler_script);
     hash = ap_md5(r->pool, (const unsigned char *)hash);
 
     apr_table_setn(r->subprocess_env, "mod_wsgi.magic", hash);
@@ -8383,6 +8918,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     char *key;
     apr_sockaddr_t *addr;
 
+    char const *script;
     char const *magic;
     char const *hash;
 
@@ -8563,9 +9099,12 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    hash = apr_psprintf(r->pool, "%ld|%s|%s",
+    script = apr_table_get(r->subprocess_env, "mod_wsgi.handler_script");
+
+    hash = apr_psprintf(r->pool, "%ld|%s|%s|%s",
                         wsgi_daemon_process->group->random,
-                        wsgi_daemon_process->group->socket, r->filename);
+                        wsgi_daemon_process->group->socket, r->filename,
+                        script);
     hash = ap_md5(r->pool, (const unsigned char *)hash);
 
     if (strcmp(magic, hash) != 0) {
@@ -8633,6 +9172,9 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
                                               "mod_wsgi.application_group");
     config->callable_object = apr_table_get(r->subprocess_env,
                                             "mod_wsgi.callable_object");
+
+    config->handler_script = apr_table_get(r->subprocess_env,
+                                           "mod_wsgi.handler_script");
 
     config->script_reloading = atoi(apr_table_get(r->subprocess_env,
                                                   "mod_wsgi.script_reloading"));
@@ -8770,7 +9312,7 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
     wsgi_python_child_init(p);
 }
 
-#if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
 
 #include "apr_lib.h"
 
@@ -8830,7 +9372,7 @@ static void Auth_dealloc(AuthObject *self)
     PyObject_Del(self);
 }
 
-static PyObject *Auth_environ(AuthObject *self)
+static PyObject *Auth_environ(AuthObject *self, const char *group)
 {
     PyObject *vars;
     PyObject *object;
@@ -8911,8 +9453,12 @@ static PyObject *Auth_environ(AuthObject *self)
     PyDict_SetItemString(vars, "REQUEST_URI", object);
     Py_DECREF(object);
 
-    object = PyString_FromString(self->config->server_group);
-    PyDict_SetItemString(vars, "mod_wsgi.server_group", object);
+    object = PyString_FromString("");
+    PyDict_SetItemString(vars, "mod_wsgi.process_group", object);
+    Py_DECREF(object);
+
+    object = PyString_FromString(group);
+    PyDict_SetItemString(vars, "mod_wsgi.application_group", object);
     Py_DECREF(object);
 
     object = PyInt_FromLong(self->config->script_reloading);
@@ -8992,6 +9538,7 @@ static PyTypeObject Auth_Type = {
     0,                      /*tp_is_gc*/
 };
 
+#if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
 static authn_status wsgi_check_password(request_rec *r, const char *user,
                                         const char *password)
 {
@@ -9003,6 +9550,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
     char *name = NULL;
     int exists = 0;
 
+    const char *script;
     const char *group;
 
     authn_status status;
@@ -9022,7 +9570,8 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
      * it is safe to start manipulating python objects.
      */
 
-    group = wsgi_server_group(r, config->server_group);
+    script = config->auth_user_script->handler_script;
+    group = wsgi_server_group(r, config->auth_user_script->application_group);
 
     interp = wsgi_acquire_interpreter(group);
 
@@ -9036,7 +9585,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
 
     /* Calculate the Python module name to be used for script. */
 
-    name = wsgi_module_name(r, config->auth_user_script);
+    name = wsgi_module_name(r->pool, script);
 
     /*
      * Use a lock around the check to see if the module is
@@ -9066,7 +9615,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
      */
 
     if (module && config->script_reloading) {
-        if (wsgi_reload_required(r, config->auth_user_script, module)) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
             /*
              * Script file has changed. Only support module
              * reloading for authentication scripts. Remove the
@@ -9085,8 +9634,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
     }
 
     if (!module) {
-        module = wsgi_load_source(r, name, exists, config->auth_user_script,
-                                  "", group);
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
     }
 
     /* Safe now to release the module lock. */
@@ -9118,7 +9666,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
             adapter = newAuthObject(r, config);
 
             if (adapter) {
-                vars = Auth_environ(adapter);
+                vars = Auth_environ(adapter, group);
 
                 Py_INCREF(object);
                 args = Py_BuildValue("(Oss)", vars, user, password);
@@ -9182,8 +9730,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
             ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
                           "mod_wsgi (pid=%d): Target WSGI user "
                           "authentication script '%s' does not provide "
-                          "'Basic' auth provider.", getpid(),
-                          config->auth_user_script);
+                          "'Basic' auth provider.", getpid(), script);
             Py_END_ALLOW_THREADS
         }
 
@@ -9192,7 +9739,7 @@ static authn_status wsgi_check_password(request_rec *r, const char *user,
         if (PyErr_Occurred()) {
             LogObject *log;
             log = newLogObject(r, APLOG_ERR);
-            wsgi_log_python_error(r, log);
+            wsgi_log_python_error(r, log, script);
             Py_DECREF(log);
         }
     }
@@ -9217,6 +9764,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
     char *name = NULL;
     int exists = 0;
 
+    const char *script;
     const char *group;
 
     authn_status status;
@@ -9236,8 +9784,9 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
      * it is safe to start manipulating python objects.
      */
 
-    group = wsgi_server_group(r, config->server_group);
-    
+    script = config->auth_user_script->handler_script;
+    group = wsgi_server_group(r, config->auth_user_script->application_group);
+
     interp = wsgi_acquire_interpreter(group);
 
     if (!interp) {
@@ -9250,7 +9799,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
 
     /* Calculate the Python module name to be used for script. */
 
-    name = wsgi_module_name(r, config->auth_user_script);
+    name = wsgi_module_name(r->pool, script);
 
     /*
      * Use a lock around the check to see if the module is
@@ -9280,7 +9829,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
      */
 
     if (module && config->script_reloading) {
-        if (wsgi_reload_required(r, config->auth_user_script, module)) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
             /*
              * Script file has changed. Only support module
              * reloading for authentication scripts. Remove the
@@ -9299,8 +9848,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
     }
 
     if (!module) {
-        module = wsgi_load_source(r, name, exists, config->auth_user_script,
-                                  "", group);
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
     }
 
     /* Safe now to release the module lock. */
@@ -9332,7 +9880,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
             adapter = newAuthObject(r, config);
 
             if (adapter) {
-                vars = Auth_environ(adapter);
+                vars = Auth_environ(adapter, group);
 
                 Py_INCREF(object);
                 args = Py_BuildValue("(Oss)", vars, user, realm);
@@ -9396,8 +9944,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
             ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
                           "mod_wsgi (pid=%d): Target WSGI user "
                           "authentication script '%s' does not provide "
-                          "'Digest' auth provider.", getpid(),
-                          config->auth_user_script);
+                          "'Digest' auth provider.", getpid(), script);
             Py_END_ALLOW_THREADS
         }
 
@@ -9406,7 +9953,7 @@ static authn_status wsgi_get_realm_hash(request_rec *r, const char *user,
         if (PyErr_Occurred()) {
             LogObject *log;
             log = newLogObject(r, APLOG_ERR);
-            wsgi_log_python_error(r, log);
+            wsgi_log_python_error(r, log, script);
             Py_DECREF(log);
         }
     }
@@ -9425,6 +9972,7 @@ static const authn_provider wsgi_authn_provider =
     &wsgi_check_password,
     &wsgi_get_realm_hash
 };
+#endif
 
 static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
                                 apr_table_t **grpstatus)
@@ -9437,11 +9985,12 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
     char *name = NULL;
     int exists = 0;
 
+    const char *script;
     const char *group;
 
     int status = HTTP_INTERNAL_SERVER_ERROR;
 
-    if (!config->authz_group_script) {
+    if (!config->auth_group_script) {
         ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
                      "mod_wsgi (pid=%d): Location of WSGI group "
                      "authentication script not provided.", getpid());
@@ -9454,7 +10003,8 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
      * it is safe to start manipulating python objects.
      */
 
-    group = wsgi_server_group(r, config->server_group);
+    script = config->auth_group_script->handler_script;
+    group = wsgi_server_group(r, config->auth_group_script->application_group);
 
     interp = wsgi_acquire_interpreter(group);
 
@@ -9463,12 +10013,12 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
                       "mod_wsgi (pid=%d): Cannot acquire interpreter '%s'.",
                       getpid(), group);
 
-        return AUTH_GENERAL_ERROR;
+        return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     /* Calculate the Python module name to be used for script. */
 
-    name = wsgi_module_name(r, config->authz_group_script);
+    name = wsgi_module_name(r->pool, script);
 
     /*
      * Use a lock around the check to see if the module is
@@ -9498,7 +10048,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
      */
 
     if (module && config->script_reloading) {
-        if (wsgi_reload_required(r, config->authz_group_script, module)) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
             /*
              * Script file has changed. Only support module
              * reloading for authentication scripts. Remove the
@@ -9517,8 +10067,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
     }
 
     if (!module) {
-        module = wsgi_load_source(r, name, exists, config->authz_group_script,
-                                  "", group);
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
     }
 
     /* Safe now to release the module lock. */
@@ -9529,7 +10078,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
 
     /* Assume an internal server error unless everything okay. */
 
-    status = AUTH_GENERAL_ERROR;
+    status = HTTP_INTERNAL_SERVER_ERROR;
 
     /* Determine if script exists and execute it. */
 
@@ -9550,7 +10099,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
             adapter = newAuthObject(r, config);
 
             if (adapter) {
-                vars = Auth_environ(adapter);
+                vars = Auth_environ(adapter, group);
 
                 Py_INCREF(object);
                 args = Py_BuildValue("(Os)", vars, r->user);
@@ -9577,8 +10126,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
                                               "mod_wsgi (pid=%d): Groups for "
                                               "user returned from '%s' must "
                                               "be an iterable sequence of "
-                                              "strings.", getpid(),
-                                              config->authz_group_script);
+                                              "strings.", getpid(), script);
                                 Py_END_ALLOW_THREADS
 
                                 Py_DECREF(item);
@@ -9604,7 +10152,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
                                       "mod_wsgi (pid=%d): Groups for user "
                                       "returned from '%s' must be an iterable "
                                       "sequence of strings.", getpid(),
-                                      config->authz_group_script);
+                                      script);
                         Py_END_ALLOW_THREADS
                     }
 
@@ -9647,8 +10195,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
             ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
                           "mod_wsgi (pid=%d): Target WSGI group "
                           "authentication script '%s' does not provide "
-                          "group provider.", getpid(),
-                          config->authz_group_script);
+                          "group provider.", getpid(), script);
             Py_END_ALLOW_THREADS
         }
 
@@ -9657,7 +10204,7 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
         if (PyErr_Occurred()) {
             LogObject *log;
             log = newLogObject(r, APLOG_ERR);
-            wsgi_log_python_error(r, log);
+            wsgi_log_python_error(r, log, script);
             Py_DECREF(log);
         }
     }
@@ -9670,6 +10217,484 @@ static int wsgi_groups_for_user(request_rec *r, WSGIRequestConfig *config,
 
     if (status == OK)
         *grpstatus = grps;
+
+    return status;
+}
+
+static int wsgi_allow_access(request_rec *r, WSGIRequestConfig *config,
+                             const char *host)
+{
+    InterpreterObject *interp = NULL;
+    PyObject *modules = NULL;
+    PyObject *module = NULL;
+    char *name = NULL;
+    int exists = 0;
+
+    const char *script;
+    const char *group;
+
+    int result = 0;
+
+    if (!config->access_script) {
+        ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                     "mod_wsgi (pid=%d): Location of WSGI host "
+                     "access script not provided.", getpid());
+
+        return 0;
+    }
+
+    /*
+     * Acquire the desired python interpreter. Once this is done
+     * it is safe to start manipulating python objects.
+     */
+
+    script = config->access_script->handler_script;
+    group = wsgi_server_group(r, config->access_script->application_group);
+
+    interp = wsgi_acquire_interpreter(group);
+
+    if (!interp) {
+        ap_log_rerror(APLOG_MARK, WSGI_LOG_CRIT(0), r,
+                      "mod_wsgi (pid=%d): Cannot acquire interpreter '%s'.",
+                      getpid(), group);
+
+        return 0;
+    }
+
+    /* Calculate the Python module name to be used for script. */
+
+    name = wsgi_module_name(r->pool, script);
+
+    /*
+     * Use a lock around the check to see if the module is
+     * already loaded and the import of the module to prevent
+     * two request handlers trying to import the module at the
+     * same time.
+     */
+
+#if APR_HAS_THREADS
+    Py_BEGIN_ALLOW_THREADS
+    apr_thread_mutex_lock(wsgi_module_lock);
+    Py_END_ALLOW_THREADS
+#endif
+
+    modules = PyImport_GetModuleDict();
+    module = PyDict_GetItemString(modules, name);
+
+    Py_XINCREF(module);
+
+    if (module)
+        exists = 1;
+
+    /*
+     * If script reloading is enabled and the module for it has
+     * previously been loaded, see if it has been modified since
+     * the last time it was accessed.
+     */
+
+    if (module && config->script_reloading) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
+            /*
+             * Script file has changed. Only support module
+             * reloading for authentication scripts. Remove the
+             * module from the modules dictionary before
+             * reloading it again. If code is executing within
+             * the module at the time, the callers reference
+             * count on the module should ensure it isn't
+             * actually destroyed until it is finished.
+             */
+
+            Py_DECREF(module);
+            module = NULL;
+
+            PyDict_DelItemString(modules, name);
+        }
+    }
+
+    if (!module) {
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
+    }
+
+    /* Safe now to release the module lock. */
+
+#if APR_HAS_THREADS
+    apr_thread_mutex_unlock(wsgi_module_lock);
+#endif
+
+    /* Assume not allowed unless everything okay. */
+
+    result = 0;
+
+    /* Determine if script exists and execute it. */
+
+    if (module) {
+        PyObject *module_dict = NULL;
+        PyObject *object = NULL;
+
+        module_dict = PyModule_GetDict(module);
+        object = PyDict_GetItemString(module_dict, "allow_access");
+
+        if (object) {
+            PyObject *vars = NULL;
+            PyObject *args = NULL;
+            PyObject *flag = NULL;
+
+            AuthObject *adapter = NULL;
+
+            adapter = newAuthObject(r, config);
+
+            if (adapter) {
+                vars = Auth_environ(adapter, group);
+
+                Py_INCREF(object);
+                args = Py_BuildValue("(Oz)", vars, host);
+                flag = PyEval_CallObject(object, args);
+                Py_DECREF(args);
+                Py_DECREF(object);
+                Py_DECREF(vars);
+
+                if (flag) {
+                    if (flag == Py_None) {
+                        result = -1;
+                    }
+                    else if (PyBool_Check(flag)) {
+                        if (flag == Py_True)
+                            result = 1;
+                    }
+                    else {
+                        Py_BEGIN_ALLOW_THREADS
+                        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                                      "mod_wsgi (pid=%d): Indicator of "
+                                      "host accessibility returned from '%s' "
+                                      "must a boolean or None.", getpid(),
+                                      script);
+                        Py_END_ALLOW_THREADS
+                    }
+
+                    Py_DECREF(flag);
+                }
+
+                /*
+                 * Wipe out references to Apache request object
+                 * held by Python objects, so can detect when an
+                 * application holds on to the transient Python
+                 * objects beyond the life of the request and
+                 * thus raise an exception if they are used.
+                 */
+
+                adapter->r = NULL;
+
+                /*
+                 * Flush any data held within error log object
+                 * and mark it as expired so that it can't be
+                 * used beyond life of the request. We hope that
+                 * this doesn't error, as it will overwrite any
+                 * error from application if it does.
+                 */
+
+                args = PyTuple_New(0);
+                object = Log_flush(adapter->log, args);
+                Py_XDECREF(object);
+                Py_DECREF(args);
+
+                adapter->log->r = NULL;
+                adapter->log->expired = 1;
+
+                Py_DECREF((PyObject *)adapter);
+            }
+            else
+                Py_DECREF(object);
+        }
+        else {
+            Py_BEGIN_ALLOW_THREADS
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d): Target WSGI host "
+                          "access script '%s' does not provide "
+                          "host validator.", getpid(), script);
+            Py_END_ALLOW_THREADS
+        }
+
+        /* Log any details of exceptions if execution failed. */
+
+        if (PyErr_Occurred()) {
+            LogObject *log;
+            log = newLogObject(r, APLOG_ERR);
+            wsgi_log_python_error(r, log, script);
+            Py_DECREF(log);
+        }
+    }
+
+    /* Cleanup and release interpreter, */
+
+    Py_XDECREF(module);
+
+    wsgi_release_interpreter(interp);
+
+    return result;
+}
+
+static int wsgi_hook_access_checker(request_rec *r)
+{
+    WSGIRequestConfig *config;
+
+    int allow = 0;
+    const char *host = NULL;
+
+    config = wsgi_create_req_config(r->pool, r);
+
+    if (!config->access_script)
+        return DECLINED;
+
+    host = ap_get_remote_host(r->connection, r->per_dir_config,
+                              REMOTE_HOST, NULL);
+
+    if (!host)
+        host = r->connection->remote_ip;
+
+    allow = wsgi_allow_access(r, config, host);
+
+    if (allow < 0)
+        return DECLINED;
+    else if (allow)
+        return OK;
+
+    if (ap_satisfies(r) != SATISFY_ANY || !ap_some_auth_required(r)) {
+        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r, "mod_wsgi (pid=%d): "
+                      "Client denied by server configuration: '%s'.",
+                      getpid(), r->filename);
+    }
+
+    return HTTP_FORBIDDEN;
+}
+
+static int wsgi_hook_check_user_id(request_rec *r)
+{
+    WSGIRequestConfig *config;
+
+    int status = -1;
+
+    const char *password;                         
+
+    InterpreterObject *interp = NULL;
+    PyObject *modules = NULL;
+    PyObject *module = NULL;
+    char *name = NULL;
+    int exists = 0;
+
+    const char *script;
+    const char *group;
+
+    if ((status = ap_get_basic_auth_pw(r, &password)))
+        return status;
+
+    config = wsgi_create_req_config(r->pool, r);
+
+    if (!config->auth_user_script)
+        return DECLINED;
+
+    /*
+     * Acquire the desired python interpreter. Once this is done
+     * it is safe to start manipulating python objects.
+     */
+
+    script = config->auth_user_script->handler_script;
+    group = wsgi_server_group(r, config->auth_user_script->application_group);
+
+    interp = wsgi_acquire_interpreter(group);
+
+    if (!interp) {
+        ap_log_rerror(APLOG_MARK, WSGI_LOG_CRIT(0), r,
+                      "mod_wsgi (pid=%d): Cannot acquire interpreter '%s'.",
+                      getpid(), group);
+
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    /* Calculate the Python module name to be used for script. */
+
+    name = wsgi_module_name(r->pool, script);
+
+    /*
+     * Use a lock around the check to see if the module is
+     * already loaded and the import of the module to prevent
+     * two request handlers trying to import the module at the
+     * same time.
+     */
+
+#if APR_HAS_THREADS
+    Py_BEGIN_ALLOW_THREADS
+    apr_thread_mutex_lock(wsgi_module_lock);
+    Py_END_ALLOW_THREADS
+#endif
+
+    modules = PyImport_GetModuleDict();
+    module = PyDict_GetItemString(modules, name);
+
+    Py_XINCREF(module);
+
+    if (module)
+        exists = 1;
+
+    /*
+     * If script reloading is enabled and the module for it has
+     * previously been loaded, see if it has been modified since
+     * the last time it was accessed.
+     */
+
+    if (module && config->script_reloading) {
+        if (wsgi_reload_required(r->pool, r, script, module)) {
+            /*
+             * Script file has changed. Only support module
+             * reloading for authentication scripts. Remove the
+             * module from the modules dictionary before
+             * reloading it again. If code is executing within
+             * the module at the time, the callers reference
+             * count on the module should ensure it isn't
+             * actually destroyed until it is finished.
+             */
+
+            Py_DECREF(module);
+            module = NULL;
+
+            PyDict_DelItemString(modules, name);
+        }
+    }
+
+    if (!module) {
+        module = wsgi_load_source(r->pool, r, name, exists, script, "", group);
+    }
+
+    /* Safe now to release the module lock. */
+
+#if APR_HAS_THREADS
+    apr_thread_mutex_unlock(wsgi_module_lock);
+#endif
+
+    /* Assume an internal server error unless everything okay. */
+
+    status = HTTP_INTERNAL_SERVER_ERROR;
+
+    /* Determine if script exists and execute it. */
+
+    if (module) {
+        PyObject *module_dict = NULL;
+        PyObject *object = NULL;
+
+        module_dict = PyModule_GetDict(module);
+        object = PyDict_GetItemString(module_dict, "check_password");
+
+        if (object) {
+            PyObject *vars = NULL;
+            PyObject *args = NULL;
+            PyObject *result = NULL;
+
+            AuthObject *adapter = NULL;
+
+            adapter = newAuthObject(r, config);
+
+            if (adapter) {
+                vars = Auth_environ(adapter, group);
+
+                Py_INCREF(object);
+                args = Py_BuildValue("(Oss)", vars, r->user, password);
+                result = PyEval_CallObject(object, args);
+                Py_DECREF(args);
+                Py_DECREF(object);
+                Py_DECREF(vars);
+
+                if (result) {
+                    if (result == Py_None) {
+                        if (config->user_authoritative) {
+                            ap_note_basic_auth_failure(r);
+                            status = HTTP_UNAUTHORIZED;
+
+                            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                                          "mod_wsgi (pid=%d): User '%s' not "
+                                          "found in executing authentication "
+                                          "script '%s', for uri '%s'.",
+                                          getpid(), r->user, script, r->uri);
+                        }
+                        else
+                            status = DECLINED;
+                    }
+                    else if (result == Py_True) {
+                        status = OK;
+                    }
+                    else if (result == Py_False) {
+                        ap_note_basic_auth_failure(r);
+                        status = HTTP_UNAUTHORIZED;
+
+                        ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                                      "mod_wsgi (pid=%d): Password mismatch "
+                                      "for user '%s' in executing "
+                                      "authentication script '%s', for uri "
+                                      "'%s'.", getpid(), r->user, script,
+                                      r->uri);
+                    }
+                    else {
+                        PyErr_SetString(PyExc_TypeError, "Basic auth "
+                                        "provider must return True, False "
+                                        "or None");
+                    }
+
+                    Py_DECREF(result);
+                }
+
+                /*
+                 * Wipe out references to Apache request object
+                 * held by Python objects, so can detect when an
+                 * application holds on to the transient Python
+                 * objects beyond the life of the request and
+                 * thus raise an exception if they are used.
+                 */
+
+                adapter->r = NULL;
+
+                /*
+                 * Flush any data held within error log object
+                 * and mark it as expired so that it can't be
+                 * used beyond life of the request. We hope that
+                 * this doesn't error, as it will overwrite any
+                 * error from application if it does.
+                 */
+
+                args = PyTuple_New(0);
+                object = Log_flush(adapter->log, args);
+                Py_XDECREF(object);
+                Py_DECREF(args);
+
+                adapter->log->r = NULL;
+                adapter->log->expired = 1;
+
+                Py_DECREF((PyObject *)adapter);
+            }
+            else
+                Py_DECREF(object);
+        }
+        else {
+            Py_BEGIN_ALLOW_THREADS
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d): Target WSGI user "
+                          "authentication script '%s' does not provide "
+                          "'Basic' auth provider.", getpid(), script);
+            Py_END_ALLOW_THREADS
+        }
+
+        /* Log any details of exceptions if execution failed. */
+
+        if (PyErr_Occurred()) {
+            LogObject *log;
+            log = newLogObject(r, APLOG_ERR);
+            wsgi_log_python_error(r, log, script);
+            Py_DECREF(log);
+        }
+    }
+
+    /* Cleanup and release interpreter, */
+
+    Py_XDECREF(module);
+
+    wsgi_release_interpreter(interp);
 
     return status;
 }
@@ -9689,7 +10714,7 @@ static int wsgi_hook_auth_checker(request_rec *r)
 
     config = wsgi_create_req_config(r->pool, r);
 
-    if (!config->authz_group_script)
+    if (!config->auth_group_script)
         return DECLINED;
 
     reqs_arr = ap_requires(r);
@@ -9708,7 +10733,7 @@ static int wsgi_hook_auth_checker(request_rec *r)
         t = reqs[x].requirement;
         w = ap_getword_white(r->pool, &t);
 
-        if (!strcasecmp(w, "wsgi-group")) {
+        if (!strcasecmp(w, "group")) {
             required_group = 1;
 
             if (!grpstatus) {
@@ -9777,11 +10802,19 @@ static int wsgi_hook_logio(apr_pool_t *pconf, apr_pool_t *ptemp,
 
 static void wsgi_register_hooks(apr_pool_t *p)
 {
-    static const char * const prev1[] = { "mod_alias.c", NULL };
-    static const char * const next1[]= { "mod_userdir.c",
-                                        "mod_vhost_alias.c", NULL };
+    static const char * const p1[] = { "mod_alias.c", NULL };
+    static const char * const n1[]= { "mod_userdir.c",
+                                      "mod_vhost_alias.c", NULL };
 
-    static const char * const next2[] = { "core.c", NULL };
+    static const char * const n2[] = { "core.c", NULL };
+
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
+#if !defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+    static const char * const p3[] = { "mod_auth.c", NULL };
+#endif
+    static const char * const n4[] = { "mod_authz_user.c", NULL };
+    static const char * const n5[] = { "mod_authz_host.c", NULL };
+#endif
 
     /*
      * Perform initialisation last in the post config phase to
@@ -9793,22 +10826,26 @@ static void wsgi_register_hooks(apr_pool_t *p)
     ap_hook_post_config(wsgi_hook_init, NULL, NULL, APR_HOOK_LAST);
     ap_hook_child_init(wsgi_hook_child_init, NULL, NULL, APR_HOOK_MIDDLE);
 
-    ap_hook_translate_name(wsgi_hook_intercept, prev1, next1, APR_HOOK_MIDDLE);
+    ap_hook_translate_name(wsgi_hook_intercept, p1, n1, APR_HOOK_MIDDLE);
     ap_hook_handler(wsgi_hook_handler, NULL, NULL, APR_HOOK_MIDDLE);
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
-    ap_hook_post_config(wsgi_hook_logio, NULL, next2, APR_HOOK_REALLY_FIRST);
+    ap_hook_post_config(wsgi_hook_logio, NULL, n2, APR_HOOK_REALLY_FIRST);
 
     wsgi_header_filter_handle =
         ap_register_output_filter("WSGI_HEADER", wsgi_header_filter,
                                   NULL, AP_FTYPE_PROTOCOL);
 #endif
 
-#if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
+#if !defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+    ap_hook_check_user_id(wsgi_hook_check_user_id, p3, NULL, APR_HOOK_MIDDLE);
+#else
     ap_register_provider(p, AUTHN_PROVIDER_GROUP, "wsgi", "0",
                          &wsgi_authn_provider);
-
-    ap_hook_auth_checker(wsgi_hook_auth_checker, NULL, NULL, APR_HOOK_MIDDLE);
+#endif
+    ap_hook_auth_checker(wsgi_hook_auth_checker, NULL, n4, APR_HOOK_MIDDLE);
+    ap_hook_access_checker(wsgi_hook_access_checker, NULL, n5, APR_HOOK_MIDDLE);
 #endif
 }
 
@@ -9860,15 +10897,17 @@ static const command_rec wsgi_commands[] =
         NULL, ACCESS_CONF|RSRC_CONF, "Name of the WSGI process group."),
 #endif
 
-    AP_INIT_TAKE1("WSGIServerGroup", wsgi_set_server_group,
-        NULL, ACCESS_CONF|RSRC_CONF, "Server interpreter group."),
-    AP_INIT_TAKE1("WSGIDispatchScript", wsgi_set_dispatch_script,
-        NULL, ACCESS_CONF|RSRC_CONF, "Location of WSGI dispatch script."),
-
     AP_INIT_TAKE1("WSGIApplicationGroup", wsgi_set_application_group,
         NULL, ACCESS_CONF|RSRC_CONF, "Application interpreter group."),
     AP_INIT_TAKE1("WSGICallableObject", wsgi_set_callable_object,
         NULL, OR_FILEINFO, "Name of entry point in WSGI script file."),
+
+    AP_INIT_RAW_ARGS("WSGIImportScript", wsgi_add_import_script,
+        NULL, RSRC_CONF, "Location of WSGI import script."),
+    AP_INIT_RAW_ARGS("WSGIDispatchScript", wsgi_set_dispatch_script,
+        NULL, ACCESS_CONF|RSRC_CONF, "Location of WSGI dispatch script."),
+    AP_INIT_TAKE1("WSGIHandlerScript", wsgi_set_handler_script,
+        NULL, ACCESS_CONF|RSRC_CONF, "Location of WSGI handler script."),
 
     AP_INIT_TAKE1("WSGIApacheExtensions", wsgi_set_apache_extensions,
          NULL, ACCESS_CONF|RSRC_CONF, "Enable/Disable Apache extensions."),
@@ -9881,11 +10920,17 @@ static const command_rec wsgi_commands[] =
     AP_INIT_TAKE1("WSGIOutputBuffering", wsgi_set_output_buffering,
         NULL, OR_FILEINFO, "Enable/Disable buffering of response."),
 
-#if defined(MOD_WSGI_WITH_AUTH_PROVIDER)
-    AP_INIT_TAKE1("WSGIAuthUserScript", wsgi_set_auth_user_script,
+#if defined(MOD_WSGI_WITH_AAA_HANDLERS)
+    AP_INIT_RAW_ARGS("WSGIAccessScript", wsgi_set_access_script,
+        NULL, OR_AUTHCFG, "Location of WSGI host access script file."),
+    AP_INIT_RAW_ARGS("WSGIAuthUserScript", wsgi_set_auth_user_script,
         NULL, OR_AUTHCFG, "Location of WSGI user auth script file."),
-    AP_INIT_TAKE1("WSGIAuthGroupScript", wsgi_set_auth_group_script,
+    AP_INIT_RAW_ARGS("WSGIAuthGroupScript", wsgi_set_auth_group_script,
         NULL, OR_AUTHCFG, "Location of WSGI group auth script file."),
+#if !defined(MOD_WSGI_WITH_AUTH_PROVIDER)
+    AP_INIT_TAKE1("WSGIUserAuthoritative", wsgi_set_user_authoritative,
+        NULL, OR_AUTHCFG, "Enable/Disable as being authoritative on users."),
+#endif
     AP_INIT_TAKE1("WSGIGroupAuthoritative", wsgi_set_group_authoritative,
         NULL, OR_AUTHCFG, "Enable/Disable as being authoritative on groups."),
 #endif
