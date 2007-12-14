@@ -2,7 +2,7 @@ Source: mod-wsgi
 Section: python
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
-Uploaders: Bernd Zeimetz <bernd@bzed.de>
+Uploaders: Bernd Zeimetz <bzed@debian.org>
 Build-Depends: debhelper (>= 5), python-all-dev, apache2-threaded-dev, dpatch
 Homepage: http://www.modwsgi.org/
 Standards-Version: 3.7.2
