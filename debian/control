@@ -7,7 +7,7 @@ Build-Depends: debhelper (>= 5), python-all-dev, apache2-threaded-dev, dpatch
 Homepage: http://www.modwsgi.org/
 Standards-Version: 3.7.2
 Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
-Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/?op=log
+Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/trunk/?op=log
 
 Package: libapache2-mod-wsgi
 Architecture: any
