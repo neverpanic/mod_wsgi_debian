@@ -1,3 +1,10 @@
+mod-wsgi (2.0~c4-2) UNRELEASED; urgency=low
+
+  * Rename mod_wsgi.load to wsgi.load (to follow
+    /etc/apache2/mods-available best practise, closes: 456737)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 06 Jan 2008 22:54:15 +0100
+
 mod-wsgi (2.0~c4-1) experimental; urgency=low
 
   * New beta version.
