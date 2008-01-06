@@ -18,7 +18,7 @@ restore_mod_wsgi() {
     fi
 }
 if version_with_old_module_name $2; then
-    test ! -e /etc/apache2/mods-available/mod_wsgi.load && restore_mod_wsgi
+    test ! -e /etc/apache2/mods-available/mod-wsgi.load && restore_mod_wsgi
 fi
 
 
