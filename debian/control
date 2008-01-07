@@ -2,12 +2,12 @@ Source: mod-wsgi
 Section: python
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
-Uploaders: Bernd Zeimetz <bzed@debian.org>
+Uploaders: Bernd Zeimetz <bernd@bzed.de>, Piotr Ożarowski <piotr@debian.org>
 Build-Depends: debhelper (>= 5), python-all-dev, apache2-threaded-dev, dpatch
 Homepage: http://www.modwsgi.org/
 Standards-Version: 3.7.3
 Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
-Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/?op=log
+Vcs-Browser: http://svn.debian.org/wsvn/python-modules/packages/mod-wsgi/trunk/?op=log
 
 Package: libapache2-mod-wsgi
 Architecture: any

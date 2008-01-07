@@ -1,3 +1,24 @@
+mod-wsgi (2.0~c4-2) experimental; urgency=low
+
+  * Rename mod_wsgi.load to wsgi.load to follow
+    /etc/apache2/mods-available best practise (sync with 1.3-2 from unstable)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 07 Jan 2008 16:36:35 +0100
+
+mod-wsgi (1.3-2) unstable; urgency=low
+
+  [ Sandro Tosi ]
+  * debian/control
+    - uniforming Vcs-Browser field
+
+  [ Piotr Ożarowski ]
+  * Rename mod_wsgi.load to wsgi.load (to follow
+    /etc/apache2/mods-available best practise, closes: 456737)
+  * Bump Standards-Version to 3.7.3 (no changes needed)
+  * Add myself to Uploaders
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 07 Jan 2008 16:24:51 +0100
+
 mod-wsgi (2.0~c4-1) experimental; urgency=low
 
   * New beta version.
@@ -12,6 +33,12 @@ mod-wsgi (2.0~c3-1) experimental; urgency=low
   * New beta version.
 
  -- Bernd Zeimetz <bernd@bzed.de>  Sat, 17 Nov 2007 16:16:36 +0100
+
+mod-wsgi (1.3-1) unstable; urgency=low
+
+  * New upstream version
+
+ -- Bernd Zeimetz <bernd@bzed.de>  Sat, 17 Nov 2007 16:15:06 +0100
 
 mod-wsgi (2.0~c2-1) experimental; urgency=low
 

@@ -3,7 +3,7 @@
 set -e
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-    a2dismod mod-wsgi || true
+    a2dismod wsgi || true
 fi
 
 rm -f /usr/lib/apache2/modules/mod_wsgi.so
