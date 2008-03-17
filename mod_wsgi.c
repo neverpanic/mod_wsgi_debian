@@ -1,7 +1,7 @@
 /* vim: set sw=4 expandtab : */
 
 /*
- * Copyright 2007 GRAHAM DUMPLETON
+ * Copyright 2007-2008 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -73,6 +73,7 @@ typedef unsigned long apr_off_t;
 #define apr_pstrdup ap_pstrdup
 #define apr_pstrcat ap_pstrcat
 #define apr_pcalloc ap_pcalloc
+#define apr_palloc ap_palloc
 typedef time_t apr_time_t;
 #include "http_config.h"
 typedef int apr_lockmech_e;
@@ -194,6 +195,34 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #endif
 
+#if AP_SERVER_MAJORVERSION_NUMBER < 2
+
+static char *apr_off_t_toa(apr_pool_t *p, apr_off_t n)
+{
+    const int BUFFER_SIZE = sizeof(apr_off_t) * 3 + 2;
+    char *buf = apr_palloc(p, BUFFER_SIZE);
+    char *start = buf + BUFFER_SIZE - 1;
+    int negative;
+    if (n < 0) {
+        negative = 1;
+        n = -n;
+    }
+    else {
+        negative = 0;
+    }
+    *start = 0;
+    do {
+        *--start = '0' + (char)(n % 10);
+        n /= 10;
+    } while (n);
+    if (negative) {
+        *--start = '-';
+    }
+    return start;
+}
+
+#endif
+
 /* Compatibility macros for log level and status. */
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
@@ -217,7 +246,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "2.0c4"
+#define MOD_WSGI_VERSION_STRING "2.0c5"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -282,11 +311,11 @@ typedef struct {
     apr_lockmech_e lock_mechanism;
 
     int python_optimize;
-    const char *python_executable;
     const char *python_home;
     const char *python_path;
     const char *python_eggs;
 
+    int restrict_embedded;
     int restrict_stdin;
     int restrict_stdout;
     int restrict_signal;
@@ -301,13 +330,11 @@ typedef struct {
 
     apr_array_header_t *import_list;
     WSGIScriptFile *dispatch_script;
-    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
     int script_reloading;
     int reload_mechanism;
-    int output_buffering;
 } WSGIServerConfig;
 
 static WSGIServerConfig *wsgi_server_config = NULL;
@@ -345,11 +372,11 @@ static WSGIServerConfig *newWSGIServerConfig(apr_pool_t *p)
 #endif
 
     object->python_optimize = -1;
-    object->python_executable = NULL;
     object->python_home = NULL;
     object->python_path = NULL;
     object->python_eggs = NULL;
 
+    object->restrict_embedded = -1;
     object->restrict_stdin = -1;
     object->restrict_stdout = -1;
     object->restrict_signal = -1;
@@ -368,13 +395,11 @@ static WSGIServerConfig *newWSGIServerConfig(apr_pool_t *p)
 
     object->import_list = NULL;
     object->dispatch_script = NULL;
-    object->handler_script = NULL;
 
     object->apache_extensions = -1;
     object->pass_authorization = -1;
     object->script_reloading = -1;
     object->reload_mechanism = -1;
-    object->output_buffering = -1;
 
     return object;
 }
@@ -438,11 +463,6 @@ static void *wsgi_merge_server_config(apr_pool_t *p, void *base_conf,
     else
         config->dispatch_script = parent->dispatch_script;
 
-    if (child->handler_script)
-        config->handler_script = child->handler_script;
-    else
-        config->handler_script = parent->handler_script;
-
     if (child->apache_extensions != -1)
         config->apache_extensions = child->apache_extensions;
     else
@@ -463,11 +483,6 @@ static void *wsgi_merge_server_config(apr_pool_t *p, void *base_conf,
     else
         config->reload_mechanism = parent->reload_mechanism;
 
-    if (child->output_buffering != -1)
-        config->output_buffering = child->output_buffering;
-    else
-        config->output_buffering = parent->output_buffering;
-
     return config;
 }
 
@@ -481,13 +496,11 @@ typedef struct {
     const char *callable_object;
 
     WSGIScriptFile *dispatch_script;
-    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
     int script_reloading;
     int reload_mechanism;
-    int output_buffering;
 
     WSGIScriptFile *access_script;
     WSGIScriptFile *auth_user_script;
@@ -509,13 +522,11 @@ static WSGIDirectoryConfig *newWSGIDirectoryConfig(apr_pool_t *p)
     object->callable_object = NULL;
 
     object->dispatch_script = NULL;
-    object->handler_script = NULL;
 
     object->apache_extensions = -1;
     object->pass_authorization = -1;
     object->script_reloading = -1;
     object->reload_mechanism = -1;
-    object->output_buffering = -1;
 
     object->access_script = NULL;
     object->auth_user_script = NULL;
@@ -572,11 +583,6 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
     else
         config->dispatch_script = parent->dispatch_script;
 
-    if (child->handler_script)
-        config->handler_script = child->handler_script;
-    else
-        config->handler_script = parent->handler_script;
-
     if (child->apache_extensions != -1)
         config->apache_extensions = child->apache_extensions;
     else
@@ -596,11 +602,6 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
         config->reload_mechanism = child->reload_mechanism;
     else
         config->reload_mechanism = parent->reload_mechanism;
-
-    if (child->output_buffering != -1)
-        config->output_buffering = child->output_buffering;
-    else
-        config->output_buffering = parent->output_buffering;
 
     if (child->access_script)
         config->access_script = child->access_script;
@@ -640,13 +641,11 @@ typedef struct {
     const char *callable_object;
 
     WSGIScriptFile *dispatch_script;
-    const char *handler_script;
 
     int apache_extensions;
     int pass_authorization;
     int script_reloading;
     int reload_mechanism;
-    int output_buffering;
 
     WSGIScriptFile *access_script;
     WSGIScriptFile *auth_user_script;
@@ -904,53 +903,6 @@ static const char *wsgi_callable_object(request_rec *r, const char *s)
     return "application";
 }
 
-static const char *wsgi_handler_script(request_rec *r, const char *s)
-{
-    const char *name = NULL;
-    const char *value = NULL;
-
-    if (!s)
-        return "";
-
-    if (*s != '%')
-        return s;
-
-    name = s + 1;
-
-    if (*name) {
-        if (!strcmp(name, "{RESOURCE}"))
-            return "";
-
-        if (strstr(name, "{ENV:") == name) {
-            int len = 0;
-
-            name = name + 5;
-            len = strlen(name);
-
-            if (len && name[len-1] == '}') {
-                name = apr_pstrndup(r->pool, name, len-1);
-
-                value = apr_table_get(r->notes, name);
-
-                if (!value)
-                    value = apr_table_get(r->subprocess_env, name);
-
-                if (!value)
-                    value = getenv(name);
-
-                if (value) {
-                    if (*value == '%' && strstr(value, "%{ENV:") != value)
-                        return wsgi_handler_script(r, value);
-
-                    return value;
-                }
-            }
-        }
-    }
-
-    return s;
-}
-
 static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
 {
     WSGIRequestConfig *config = NULL;
@@ -996,13 +948,6 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
     if (!config->dispatch_script)
         config->dispatch_script = sconfig->dispatch_script;
 
-    config->handler_script = dconfig->handler_script;
-
-    if (!config->handler_script)
-        config->handler_script = sconfig->handler_script;
-
-    config->handler_script = wsgi_handler_script(r, config->handler_script);
-
     config->apache_extensions = dconfig->apache_extensions;
 
     if (config->apache_extensions < 0) {
@@ -1031,16 +976,12 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
 
     if (config->reload_mechanism == -1) {
         config->reload_mechanism = sconfig->reload_mechanism;
-        if (config->reload_mechanism == -1)
-            config->reload_mechanism = WSGI_RELOAD_MODULE;
-    }
-
-    config->output_buffering = dconfig->output_buffering;
-
-    if (config->output_buffering < 0) {
-        config->output_buffering = sconfig->output_buffering;
-        if (config->output_buffering < 0)
-            config->output_buffering = 0;
+        if (config->reload_mechanism == -1) {
+            if (*config->process_group)
+                config->reload_mechanism = WSGI_RELOAD_PROCESS;
+            else
+                config->reload_mechanism = WSGI_RELOAD_MODULE;
+        }
     }
 
     config->access_script = dconfig->access_script;
@@ -1524,7 +1465,6 @@ static PyObject *Input_close(InputObject *self, PyObject *args)
 static PyObject *Input_read(InputObject *self, PyObject *args)
 {
     long size = -1;
-    int blocking = 1;
 
     PyObject *result = NULL;
     char *buffer = NULL;
@@ -1556,81 +1496,207 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
         self->init = 1;
     }
 
-    /*
-     * No point continuing if requested size is zero or if no
-     * more data to read and no buffered data.
-     */
+    /* No point continuing if no more data to be consumed. */
 
-    if ((self->done && self->length == 0) || size == 0)
+    if (self->done && self->length == 0)
         return PyString_FromString("");
 
     /*
-     * If size is not specified for the number of bytes to read
-     * in, default to reading in standard Apache block size.
-     * Denote that blocking until we accumulate data of
-     * specified size is disabled in this case.
+     * If requested size if zero bytes, then still need to pass
+     * this through to Apache input filters so that any
+     * 100-continue response is triggered.
      */
 
-    if (size < 0) {
-        size = HUGE_STRING_LEN;
-        blocking = 0;
+    if (size == 0) {
+        char dummy[1];
+
+        Py_BEGIN_ALLOW_THREADS
+        n = ap_get_client_block(self->r, dummy, 0);
+        Py_END_ALLOW_THREADS
+
+        if (n == -1) {
+            PyErr_SetString(PyExc_IOError, "request data read error");
+            Py_DECREF(result);
+            return NULL;
+        }
+
+        return PyString_FromString("");
     }
 
-    /* Allocate string of the exact size required. */
+    /*
+     * First deal with case where size has been specified. After
+     * that deal with case where expected that all remaining
+     * data is to be read in and returned as one string.
+     */
 
-    result = PyString_FromStringAndSize(NULL, size);
+    if (size > 0) {
+        /* Allocate string of the exact size required. */
 
-    if (!result)
-        return NULL;
+        result = PyString_FromStringAndSize(NULL, size);
 
-    buffer = PyString_AS_STRING((PyStringObject *)result);
+        if (!result)
+            return NULL;
 
-    /* Copy any residual data from use of readline(). */
+        buffer = PyString_AS_STRING((PyStringObject *)result);
 
-    if (self->buffer && self->length) {
-        if (size >= self->length) {
+        /* Copy any residual data from use of readline(). */
+
+        if (self->buffer && self->length) {
+            if (size >= self->length) {
+                length = self->length;
+                memcpy(buffer, self->buffer + self->offset, length);
+                self->offset = 0;
+                self->length = 0;
+            }
+            else {
+                length = size;
+                memcpy(buffer, self->buffer + self->offset, length);
+                self->offset += length;
+                self->length -= length;
+            }
+        }
+
+        /* If all data residual buffer consumed then free it. */
+
+        if (!self->length) {
+            free(self->buffer);
+            self->buffer = NULL;
+        }
+
+        /* Read in remaining data required to achieve size. */
+
+        if (length < size) {
+            while (length != size) {
+                Py_BEGIN_ALLOW_THREADS
+                n = ap_get_client_block(self->r, buffer + length,
+                                        size - length);
+                Py_END_ALLOW_THREADS
+
+                if (n == -1) {
+                    PyErr_SetString(PyExc_IOError, "request data read error");
+                    Py_DECREF(result);
+                    return NULL;
+                }
+                else if (n == 0) {
+                    /* Have exhausted all the available input data. */
+
+                    self->done = 1;
+                    break;
+                }
+
+                length += n;
+            }
+
+            /*
+             * Resize the final string. If the size reduction is
+             * by more than 25% of the string size, then Python
+             * will allocate a new block of memory and copy the
+             * data into it.
+             */
+
+            if (length != size) {
+                if (_PyString_Resize(&result, length))
+                    return NULL;
+            }
+        }
+    }
+    else {
+        /*
+         * Here we are going to try and read in all the
+         * remaining data. First we have to allocate a suitably
+         * large string, but we can't fully trust the amount
+         * that the request structure says is remaining based on
+         * the original content length though, as an input
+         * filter can insert/remove data from the input stream
+         * thereby invalidating the original content length.
+         * What we do is allow for an extra 25% above what we
+         * have already buffered and what the request structure
+         * says is remaining. A value of 25% has been chosen so
+         * as to match best how Python handles resizing of
+         * strings. Note that even though we do this and allow
+         * all available content, strictly speaking the WSGI
+         * specification says we should only read up until content
+         * length. This though is because the WSGI specification
+         * is deficient in dealing with the concept of mutating
+         * input filters. Since read() with no argument is also
+         * not allowed by WSGI specification implement it in the
+         * way which is most logical and ensure that input data
+         * is not truncated.
+         */
+
+        size = self->length;
+
+        if (self->r->remaining > 0)
+            size += self->r->remaining;
+
+        size = size + (size >> 2);
+
+        if (size < 256)
+            size = 256;
+
+        /* Allocate string of the estimated size. */
+
+        result = PyString_FromStringAndSize(NULL, size);
+
+        if (!result)
+            return NULL;
+
+        buffer = PyString_AS_STRING((PyStringObject *)result);
+
+        /*
+         * Copy any residual data from use of readline(). The
+         * residual should always be less in size than the
+         * string we have allocated to hold it, so can consume
+         * all of it.
+         */
+
+        if (self->buffer && self->length) {
             length = self->length;
             memcpy(buffer, self->buffer + self->offset, length);
             self->offset = 0;
             self->length = 0;
+
+            free(self->buffer);
+            self->buffer = NULL;
         }
-        else {
-            length = size;
-            memcpy(buffer, self->buffer + self->offset, length);
-            self->offset += length;
-            self->length -= length;
+
+        /* Now make first attempt at reading remaining data. */
+
+        Py_BEGIN_ALLOW_THREADS
+        n = ap_get_client_block(self->r, buffer + length, size - length);
+        Py_END_ALLOW_THREADS
+
+        if (n == -1) {
+            PyErr_SetString(PyExc_IOError, "request data read error");
+            Py_DECREF(result);
+            return NULL;
         }
-    }
+        else if (n == 0) {
+            /* Have exhausted all the available input data. */
 
-    /* If all data residual buffer consumed then free it. */
+            self->done = 1;
+        }
 
-    if (!self->length) {
-        free(self->buffer);
-        self->buffer = NULL;
-    }
+        length += n;
 
-    /*
-     * If not required to block and we already have some data
-     * from residual buffer we can return immediately.
-     */
+        /*
+         * Don't just assume that all data has been read if
+         * amount read was less than that requested. Still must
+         * perform a read which returns that no more data found.
+         */
 
-    if (!blocking && length != 0) {
-        if (length != size) {
-            if (_PyString_Resize(&result, length))
+        while (!self->done) {
+            /* Increase the size of the string by 25%. */
+
+            size = size + (size >> 2);
+
+            if (_PyString_Resize(&result, size))
                 return NULL;
-        }
 
-        return result;
-    }
+            buffer = PyString_AS_STRING((PyStringObject *)result);
 
-    /*
-     * Read in remaining data required to achieve size. If
-     * requested size of data wasn't able to be read in just
-     * return what was able to be read if blocking not required.
-     */
+            /* Now make succesive attempt at reading data. */
 
-    if (length < size) {
-        while (length != size) {
             Py_BEGIN_ALLOW_THREADS
             n = ap_get_client_block(self->r, buffer + length, size - length);
             Py_END_ALLOW_THREADS
@@ -1644,22 +1710,16 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
                 /* Have exhausted all the available input data. */
 
                 self->done = 1;
-                break;
             }
 
             length += n;
-
-            /* Don't read more if not required to block. */
-
-            if (!blocking)
-                break;
         }
 
         /*
-         * Resize the final string. If the size reduction is
-         * by more than 25% of the string size, then Python
-         * will allocate a new block of memory and copy the
-         * data into it.
+         * Resize the final string. If the size reduction is by
+         * more than 25% of the string size, then Python will
+         * allocate a new block of memory and copy the data into
+         * it.
          */
 
         if (length != size) {
@@ -2122,6 +2182,7 @@ static PyTypeObject Input_Type = {
 
 typedef struct {
         PyObject_HEAD
+        int result;
         request_rec *r;
 #if defined(MOD_WSGI_WITH_BUCKETS)
         apr_bucket_brigade *bb;
@@ -2133,9 +2194,21 @@ typedef struct {
         const char *status_line;
         PyObject *headers;
         PyObject *sequence;
+        int content_length_set;
+        apr_off_t content_length;
+        apr_off_t output_length;
 } AdapterObject;
 
 static PyTypeObject Adapter_Type;
+
+typedef struct {
+        PyObject_HEAD
+        AdapterObject *adapter;
+        PyObject *filelike;
+        apr_size_t blksize;
+} StreamObject;
+
+static PyTypeObject Stream_Type;
 
 static AdapterObject *newAdapterObject(request_rec *r)
 {
@@ -2144,6 +2217,8 @@ static AdapterObject *newAdapterObject(request_rec *r)
     self = PyObject_New(AdapterObject, &Adapter_Type);
     if (self == NULL)
         return NULL;
+
+    self->result = HTTP_INTERNAL_SERVER_ERROR;
 
     self->r = r;
 
@@ -2158,6 +2233,10 @@ static AdapterObject *newAdapterObject(request_rec *r)
     self->status_line = NULL;
     self->headers = NULL;
     self->sequence = NULL;
+
+    self->content_length_set = 0;
+    self->content_length = 0;
+    self->output_length = 0;
 
     self->input = newInputObject(r);
     self->log = newLogObject(r, APLOG_ERR);
@@ -2271,8 +2350,30 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
 
     r = self->r;
 
+    /* Have response headers yet been sent. */
+
     if (self->headers) {
-        int set = 0;
+        /*
+         * Force a zero length read before sending the
+         * headers. This will ensure that if no request
+         * content has been read that any '100 Continue'
+         * response will be flushed and sent back to the
+         * client if client was expecting one. Only
+         * want to do this for 2xx and 3xx status values.
+         */
+
+        if (self->status >= 200 && self->status < 400) {
+            PyObject *args = NULL;
+            PyObject *result = NULL;
+            args = Py_BuildValue("(i)", 0);
+            result = Input_read(self->input, args);
+            if (PyErr_Occurred())
+                PyErr_Clear();
+            Py_DECREF(args);
+            Py_XDECREF(result);
+        }
+
+        /* Now setup response headers in request object. */
 
         r->status = self->status;
         r->status_line = self->status_line;
@@ -2348,7 +2449,7 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
 
                 errno = 0;
                 l = strtol(v, &v, 10);
-                if (*v || errno == ERANGE) {
+                if (*v || errno == ERANGE || l < 0) {
                     PyErr_SetString(PyExc_ValueError,
                                     "invalid content length");
                     return 0;
@@ -2356,7 +2457,8 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
 
                 ap_set_content_length(r, l);
 
-                set = 1;
+                self->content_length_set = 1;
+                self->content_length = l;
             }
             else if (!strcasecmp(name, "WWW-Authenticate")) {
                 apr_table_add(r->err_headers_out, name, value);
@@ -2371,91 +2473,120 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
          * response from application, see if response is a
          * sequence consisting of only one item and if so use
          * the current length of data being output as the
-         * content length to use.
+         * content length to use, given that there cannot be
+         * any further data.
          */
 
-        if (!set && self->sequence) {
-            if (PySequence_Check(self->sequence)) {
-                if (PySequence_Size(self->sequence) == 1)
+        if (self->sequence && PySequence_Check(self->sequence)) {
+            if (PySequence_Size(self->sequence) == 1) {
+                if (!self->content_length_set) {
                     ap_set_content_length(r, length);
 
-                if (PyErr_Occurred())
-                    PyErr_Clear();
+                    self->content_length_set = 1;
+                    self->content_length = length;
+                }
             }
+
+            if (PyErr_Occurred())
+                PyErr_Clear();
         }
+
+        /* Need to force output of headers when using Apache 1.3. */
 
         Py_BEGIN_ALLOW_THREADS
         ap_send_http_header(r);
         Py_END_ALLOW_THREADS
 
+        /*
+         * Reset flag indicating whether '100 Continue' response
+         * expected. If we don't do this then if an attempt to read
+         * input for the first time is after headers have been
+         * sent, then Apache is wrongly generate the '100 Continue'
+         * response into the response content. Not sure if this is
+         * a bug in Apache, or that it truly believes that input
+         * will never be read after the response headers have been
+         * sent.
+         */
+
+        r->expecting_100 = 0;
+
+        /* No longer need headers now that they have been sent. */
+
         Py_DECREF(self->headers);
         self->headers = NULL;
     }
 
+    /*
+     * If content length was specified, ensure that we don't
+     * actually output more data than was specified as being
+     * sent as otherwise technically in violation of HTTP RFC.
+     */
+
+    if (length) {
+        int output_length = length;
+
+        if (self->content_length_set) {
+            if (self->output_length < self->content_length) {
+                if (self->output_length + length > self->content_length) {
+                    length = self->content_length - self->output_length;
+                }
+            }
+            else
+                length = 0;
+        }
+
+        self->output_length += output_length;
+    }
+
+    /* Now output any data. */
+
     if (length) {
 #if defined(MOD_WSGI_WITH_BUCKETS)
-        if (!self->config->output_buffering) {
-            apr_bucket *b;
+        apr_bucket *b;
 
-            /*
-             * When using Apache 2.X, if buffering is not enabled
-             * then can use lower level bucket brigade APIs. This
-             * is preferred as ap_rwrite()/ap_rflush() will grow
-             * memory in the request pool on each call, which will
-             * result in an increase in memory use over time when
-             * streaming of data is being performed. The memory is
-             * still reclaimed, but only at the end of the request.
-             * Using bucket brigade API avoids this, and also
-             * avoids any copying of response data due to buffering
-             * performed by ap_rwrite().
-             */
+        /*
+         * When using Apache 2.X can use lower level
+         * bucket brigade APIs. This is preferred as
+         * ap_rwrite()/ap_rflush() will grow memory in
+         * the request pool on each call, which will
+         * result in an increase in memory use over time
+         * when streaming of data is being performed.
+         * The memory is still reclaimed, but only at
+         * the end of the request. Using bucket brigade
+         * API avoids this, and also avoids any copying
+         * of response data due to buffering performed
+         * by ap_rwrite().
+         */
 
-            if (r->connection->aborted) {
-                PyErr_SetString(PyExc_IOError, "client connection closed");
-                return 0;
-            }
-
-            if (!self->bb) {
-                self->bb = apr_brigade_create(r->pool,
-                                              r->connection->bucket_alloc);
-            }
-
-            b = apr_bucket_transient_create(data, length,
-                                            r->connection->bucket_alloc);
-            APR_BRIGADE_INSERT_TAIL(self->bb, b);
-
-            b = apr_bucket_flush_create(r->connection->bucket_alloc);
-            APR_BRIGADE_INSERT_TAIL(self->bb, b);
-
-            Py_BEGIN_ALLOW_THREADS
-            rv = ap_pass_brigade(r->output_filters, self->bb);
-            Py_END_ALLOW_THREADS
-
-            if (rv != APR_SUCCESS) {
-                PyErr_SetString(PyExc_IOError, "failed to write data");
-                return 0;
-            }
-
-            Py_BEGIN_ALLOW_THREADS
-            apr_brigade_cleanup(self->bb);
-            Py_END_ALLOW_THREADS
+        if (r->connection->aborted) {
+            PyErr_SetString(PyExc_IOError, "client connection closed");
+            return 0;
         }
-        else {
-            /*
-             * If buffering enabled then use ap_rwrite(). The complete
-             * response content will be automatically flushed at the
-             * completion of the request.
-             */
 
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_rwrite(data, length, r);
-            Py_END_ALLOW_THREADS
-
-            if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "failed to write data");
-                return 0;
-            }
+        if (!self->bb) {
+            self->bb = apr_brigade_create(r->pool,
+                                          r->connection->bucket_alloc);
         }
+
+        b = apr_bucket_transient_create(data, length,
+                                        r->connection->bucket_alloc);
+        APR_BRIGADE_INSERT_TAIL(self->bb, b);
+
+        b = apr_bucket_flush_create(r->connection->bucket_alloc);
+        APR_BRIGADE_INSERT_TAIL(self->bb, b);
+
+        Py_BEGIN_ALLOW_THREADS
+        rv = ap_pass_brigade(r->output_filters, self->bb);
+        Py_END_ALLOW_THREADS
+
+        if (rv != APR_SUCCESS) {
+            PyErr_SetString(PyExc_IOError, "failed to write data");
+            return 0;
+        }
+
+        Py_BEGIN_ALLOW_THREADS
+        apr_brigade_cleanup(self->bb);
+        Py_END_ALLOW_THREADS
 #else
         /*
          * In Apache 1.3, the bucket brigade system doesn't exist,
@@ -2473,15 +2604,13 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
             return 0;
         }
 
-        if (!self->config->output_buffering) {
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_rflush(r);
-            Py_END_ALLOW_THREADS
+        Py_BEGIN_ALLOW_THREADS
+        n = ap_rflush(r);
+        Py_END_ALLOW_THREADS
 
-            if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "failed to flush data");
-                return 0;
-            }
+        if (n == -1) {
+            PyErr_SetString(PyExc_IOError, "failed to flush data");
+            return 0;
         }
 #endif
     }
@@ -2504,6 +2633,85 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
 
     return 1;
 }
+
+#if AP_SERVER_MAJORVERSION_NUMBER >= 2
+
+/* Split buckets at 1GB when sending large files. */
+
+#define MAX_BUCKET_SIZE (0x40000000)
+
+static int Adapter_output_file(AdapterObject *self, apr_file_t* tmpfile,
+                               apr_off_t offset, apr_off_t len)
+{
+    request_rec *r;
+    apr_bucket *b;
+    apr_status_t rv;
+    apr_bucket_brigade *bb;
+
+    r = self->r;
+
+    if (r->connection->aborted) {
+        PyErr_SetString(PyExc_IOError, "client connection closed");
+        return 0;
+    }
+
+    if (len == 0)
+        return 1;
+
+    bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+
+    if (sizeof(apr_off_t) == sizeof(apr_size_t) || len < MAX_BUCKET_SIZE) {
+        /* Can use a single bucket to send file. */
+
+        b = apr_bucket_file_create(tmpfile, offset, (apr_size_t)len, r->pool,
+                                   r->connection->bucket_alloc);
+    }
+    else {
+        /* Need to create multiple buckets to send file. */
+
+        b = apr_bucket_file_create(tmpfile, offset, MAX_BUCKET_SIZE, r->pool,
+                                   r->connection->bucket_alloc);
+
+        while (len > MAX_BUCKET_SIZE) {
+            apr_bucket *cb;
+            apr_bucket_copy(b, &cb);
+            APR_BRIGADE_INSERT_TAIL(bb, cb);
+            b->start += MAX_BUCKET_SIZE;
+            len -= MAX_BUCKET_SIZE;
+        }
+
+        /* Resize just the last bucket */
+
+        b->length = (apr_size_t)len;
+    }
+
+    APR_BRIGADE_INSERT_TAIL(bb, b);
+
+    b = apr_bucket_eos_create(r->connection->bucket_alloc);
+    APR_BRIGADE_INSERT_TAIL(bb, b);
+
+    Py_BEGIN_ALLOW_THREADS
+    rv = ap_pass_brigade(r->output_filters, bb);
+    Py_END_ALLOW_THREADS
+
+    if (rv != APR_SUCCESS) {
+        PyErr_SetString(PyExc_IOError, "failed to write data");
+        return 0;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+    apr_brigade_destroy(bb);
+    Py_END_ALLOW_THREADS
+
+    if (r->connection->aborted) {
+        PyErr_SetString(PyExc_IOError, "client connection closed");
+        return 0;
+    }
+
+    return 1;
+}
+
+#endif
 
 #if AP_SERVER_MAJORVERSION_NUMBER >= 2
 APR_DECLARE_OPTIONAL_FN(int, ssl_is_https, (conn_rec *));
@@ -2589,6 +2797,12 @@ static PyObject *Adapter_environ(AdapterObject *self)
     object = (PyObject *)self->input;
     PyDict_SetItemString(vars, "wsgi.input", object);
 
+    /* Setup file wrapper object for efficient file responses. */
+
+    object = PyObject_GetAttrString((PyObject *)self, "file_wrapper");
+    PyDict_SetItemString(vars, "wsgi.file_wrapper", object);
+    Py_DECREF(object);
+
     /*
      * If Apache extensions are enabled and running in embedded
      * mode add a CObject reference to the Apache request_rec
@@ -2604,10 +2818,208 @@ static PyObject *Adapter_environ(AdapterObject *self)
     return vars;
 }
 
+static int Adapter_process_file_wrapper(AdapterObject *self)
+{
+    int done = 0;
+
+#ifndef WIN32
+#if AP_SERVER_MAJORVERSION_NUMBER >= 2
+
+    PyObject *filelike = NULL;
+    PyObject *method = NULL;
+    PyObject *object = NULL;
+
+    apr_status_t rv = 0;
+
+    apr_os_file_t fd = -1;
+    apr_file_t *tmpfile = NULL;
+    apr_finfo_t finfo;
+
+    apr_off_t fd_offset = 0;
+    apr_off_t fo_offset = 0;
+
+    apr_off_t length = 0;
+
+    /* Perform file wrapper optimisations where possible. */
+
+    if (self->sequence->ob_type != &Stream_Type)
+        return 0;
+
+    /*
+     * Only attempt to perform optimisations if the
+     * write() function returned by start_response()
+     * function has not been called with non zero length
+     * data. In other words if no prior response content
+     * generated. Technically it could be done, but want
+     * to have a consistent rule about how specifying a
+     * content length affects how much of a file is
+     * sent. Don't want to have to take into
+     * consideration whether write() function has been
+     * called or not as just complicates things.
+     */
+
+    if (self->output_length != 0)
+        return 0;
+
+    /*
+     * Work out if file wrapper is associated with a
+     * file like object, where that file object is
+     * associated with a regular file. If it does then
+     * we can optimise how the contents of the file are
+     * sent out. If no such associated file descriptor
+     * then it needs to be processed like any other
+     * iterable value.
+     */
+
+    filelike = ((StreamObject *)self->sequence)->filelike;
+
+    fd = PyObject_AsFileDescriptor(filelike);
+    if (fd == -1) {
+        PyErr_Clear();
+        return 0;
+    }
+
+    /*
+     * On some platforms, such as Linux, sendfile() system call
+     * will not work on UNIX sockets. Thus when using daemon mode
+     * cannot enable that feature.
+     */
+
+    if (!wsgi_daemon_pool)
+        apr_os_file_put(&tmpfile, &fd, APR_SENDFILE_ENABLED, self->r->pool);
+    else
+        apr_os_file_put(&tmpfile, &fd, 0, self->r->pool);
+
+    rv = apr_file_info_get(&finfo, APR_FINFO_SIZE|APR_FINFO_TYPE, tmpfile);
+    if (rv != APR_SUCCESS || finfo.filetype != APR_REG)
+        return 0;
+
+    /*
+     * Because Python file like objects potentially have
+     * their own buffering layering, or use an operating
+     * system FILE object which also has a buffering
+     * layer on top of a normal file descriptor, need to
+     * determine from the file like object its position
+     * within the file and use that as starting position.
+     * Note that it is assumed that user had flushed any
+     * modifications to the file as necessary. Also, we
+     * need to make sure we remember the original file
+     * descriptor position as will need to restore that
+     * position so it matches the upper buffering layers
+     * when done. This is done to avoid any potential
+     * problems if file like object does anything strange
+     * in its close() method which relies on file position
+     * being what it thought it should be.
+     */
+
+    rv = apr_file_seek(tmpfile, APR_CUR, &fd_offset);
+    if (rv != APR_SUCCESS)
+        return 0;
+
+    method = PyObject_GetAttrString(filelike, "tell");
+    if (!method)
+        return 0;
+
+    object = PyEval_CallObject(method, NULL);
+    Py_DECREF(method);
+
+    if (!object) {
+        PyErr_Clear();
+        return 0;
+    }
+
+   if (PyInt_Check(object)) {
+       fo_offset = PyInt_AsLong(object);
+   }
+   else if (PyLong_Check(object)) {
+#if defined(HAVE_LONG_LONG)
+       fo_offset = PyLong_AsLongLong(object);
+#else
+       fo_offset = PyLong_AsLong(object);
+#endif
+   }
+
+   if (PyErr_Occurred()){
+       Py_DECREF(object);
+       PyErr_Clear();
+       return 0;
+   }
+
+    Py_DECREF(object);
+
+    /*
+     * For a file wrapper object need to always ensure
+     * that response headers are parsed. This is done so
+     * that if the content length header has been
+     * defined we can get its value and use it to limit
+     * how much of a file is being sent. The WSGI 1.0
+     * specification says that we are meant to send all
+     * available bytes from the file, however this is
+     * questionable as sending more than content length
+     * would violate HTTP RFC. Note that this doesn't
+     * actually flush the headers out when using Apache
+     * 2.X. This is good, as we want to still be able to
+     * set the content length header if none set and file
+     * is seekable. If processing response headers fails,
+     * then need to return as if done, with error being
+     * logged later.
+     */
+
+    if (!Adapter_output(self, "", 0))
+        return 1;
+
+    /*
+     * If content length wasn't defined then determine
+     * the amount of data which is available to send and
+     * set the content length response header. Either
+     * way, if can work out length then send data
+     * otherwise fall through and treat it as normal
+     * iterable.
+     */
+
+    if (!self->content_length_set) {
+        length = finfo.size - fo_offset;
+        self->output_length += length;
+
+        ap_set_content_length(self->r, length);
+
+        self->content_length_set = 1;
+        self->content_length = length;
+
+        if (Adapter_output_file(self, tmpfile, fo_offset, length))
+            self->result = OK;
+
+        done = 1;
+    }
+    else {
+        length = finfo.size - fo_offset;
+        self->output_length += length;
+
+        /* Use user specified content length instead. */
+
+        length = self->content_length;
+
+        if (Adapter_output_file(self, tmpfile, fo_offset, length))
+            self->result = OK;
+
+        done = 1;
+    }
+
+    /*
+     * Restore position of underlying file descriptor.
+     * If this fails, then not much we can do about it.
+     */
+
+    apr_file_seek(tmpfile, APR_SET, &fd_offset);
+
+#endif
+#endif
+
+    return done;
+}
+
 static int Adapter_run(AdapterObject *self, PyObject *object)
 {
-    int result = HTTP_INTERNAL_SERVER_ERROR;
-
     PyObject *vars = NULL;
     PyObject *start = NULL;
     PyObject *args = NULL;
@@ -2635,39 +3047,41 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
     self->sequence = PyEval_CallObject(object, args);
 
     if (self->sequence != NULL) {
-        iterator = PyObject_GetIter(self->sequence);
+        if (!Adapter_process_file_wrapper(self)) {
+            iterator = PyObject_GetIter(self->sequence);
 
-        if (iterator != NULL) {
-            PyObject *item = NULL;
+            if (iterator != NULL) {
+                PyObject *item = NULL;
 
-            while ((item = PyIter_Next(iterator))) {
-                if (!PyString_Check(item)) {
-                    PyErr_Format(PyExc_TypeError, "sequence of string "
-                                 "values expected, value of type %.200s found",
-                                 item->ob_type->tp_name);
+                while ((item = PyIter_Next(iterator))) {
+                    if (!PyString_Check(item)) {
+                        PyErr_Format(PyExc_TypeError, "sequence of string "
+                                     "values expected, value of type %.200s "
+                                     "found", item->ob_type->tp_name);
+                        Py_DECREF(item);
+                        break;
+                    }
+
+                    msg = PyString_AsString(item);
+                    length = PyString_Size(item);
+
+                    if (!msg) {
+                        Py_DECREF(item);
+                        break;
+                    }
+
+                    if (length && !Adapter_output(self, msg, length)) {
+                        Py_DECREF(item);
+                        break;
+                    }
+
                     Py_DECREF(item);
-                    break;
                 }
-
-                msg = PyString_AsString(item);
-                length = PyString_Size(item);
-
-                if (!msg) {
-                    Py_DECREF(item);
-                    break;
-                }
-
-                if (length && !Adapter_output(self, msg, length)) {
-                    Py_DECREF(item);
-                    break;
-                }
-
-                Py_DECREF(item);
             }
 
             if (!PyErr_Occurred()) {
                 if (Adapter_output(self, "", 0))
-                    result = OK;
+                    self->result = OK;
             }
 
             Py_DECREF(iterator);
@@ -2681,8 +3095,8 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
              * and just truncate the response.
              */
 
-            if (self->status_line)
-                result = OK;
+            if (self->status_line && !self->headers)
+                self->result = OK;
 
             wsgi_log_python_error(self->r, self->log, self->r->filename);
         }
@@ -2713,6 +3127,25 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
     Py_DECREF(start);
     Py_DECREF(vars);
 
+    /*
+     * Log warning if more response content generated than was
+     * indicated, or less if there was no errors generated by
+     * the application.
+     */
+
+    if (self->content_length_set && ((!PyErr_Occurred() &&
+        self->output_length != self->content_length) ||
+        (self->output_length > self->content_length))) {
+        ap_log_rerror(APLOG_MARK, WSGI_LOG_DEBUG(0), self->r,
+                      "mod_wsgi (pid=%d): Content length mismatch, "
+                      "expected %s, response generated %s: %s", getpid(),
+                      apr_off_t_toa(self->r->pool, self->content_length),
+                      apr_off_t_toa(self->r->pool, self->output_length),
+                      self->r->filename);
+    }
+
+    /* Log details of any final Python exceptions. */
+
     if (PyErr_Occurred())
         wsgi_log_python_error(self->r, self->log, self->r->filename);
 
@@ -2723,10 +3156,10 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
      * in any error page automatically generated by Apache.
      */
 
-    if (result == HTTP_INTERNAL_SERVER_ERROR)
+    if (self->result == HTTP_INTERNAL_SERVER_ERROR)
         self->r->status_line = "500 Internal Server Error";
 
-    return result;
+    return self->result;
 }
 
 static PyObject *Adapter_write(AdapterObject *self, PyObject *args)
@@ -2753,9 +3186,30 @@ static PyObject *Adapter_write(AdapterObject *self, PyObject *args)
     return Py_None;
 }
 
+static PyObject *newStreamObject(AdapterObject *adapter, PyObject *filelike,
+                                 apr_size_t blksize);
+
+static PyObject *Adapter_file_wrapper(AdapterObject *self, PyObject *args)
+{
+    PyObject *filelike = NULL;
+    apr_size_t blksize = HUGE_STRING_LEN;
+    PyObject *result = NULL;
+
+    if (!self->r) {
+        PyErr_SetString(PyExc_RuntimeError, "request object has expired");
+        return NULL;
+    }
+
+    if (!PyArg_ParseTuple(args, "O|l:file_wrapper", &filelike, &blksize))
+        return NULL;
+
+    return newStreamObject(self, filelike, blksize);
+}
+
 static PyMethodDef Adapter_methods[] = {
     { "start_response", (PyCFunction)Adapter_start_response, METH_VARARGS, 0},
     { "write",          (PyCFunction)Adapter_write, METH_VARARGS, 0},
+    { "file_wrapper",   (PyCFunction)Adapter_file_wrapper, METH_VARARGS, 0},
     { NULL, NULL}
 };
 
@@ -2792,6 +3246,165 @@ static PyTypeObject Adapter_Type = {
     0,                      /*tp_iter*/
     0,                      /*tp_iternext*/
     Adapter_methods,        /*tp_methods*/
+    0,                      /*tp_members*/
+    0,                      /*tp_getset*/
+    0,                      /*tp_base*/
+    0,                      /*tp_dict*/
+    0,                      /*tp_descr_get*/
+    0,                      /*tp_descr_set*/
+    0,                      /*tp_dictoffset*/
+    0,                      /*tp_init*/
+    0,                      /*tp_alloc*/
+    0,                      /*tp_new*/
+    0,                      /*tp_free*/
+    0,                      /*tp_is_gc*/
+};
+
+static PyObject *newStreamObject(AdapterObject *adapter, PyObject *filelike,
+                                 apr_size_t blksize)
+{
+    StreamObject *self;
+
+    self = PyObject_New(StreamObject, &Stream_Type);
+    if (self == NULL)
+        return NULL;
+
+    self->adapter = adapter;
+    self->filelike = filelike;
+    self->blksize = blksize;
+
+    Py_INCREF(self->adapter);
+    Py_INCREF(self->filelike);
+
+    return (PyObject *)self;
+}
+
+static void Stream_dealloc(StreamObject *self)
+{
+    Py_DECREF(self->filelike);
+    Py_DECREF(self->adapter);
+
+    PyObject_Del(self);
+}
+
+static PyObject *Stream_iter(StreamObject *self)
+{
+    if (!self->adapter->r) {
+        PyErr_SetString(PyExc_RuntimeError, "request object has expired");
+        return NULL;
+    }
+
+    Py_INCREF(self);
+    return (PyObject *)self;
+}
+
+static PyObject *Stream_iternext(StreamObject *self)
+{
+    PyObject *method = NULL;
+    PyObject *args = NULL;
+    PyObject *result = NULL;
+
+    if (!self->adapter->r) {
+        PyErr_SetString(PyExc_RuntimeError, "request object has expired");
+        return NULL;
+    }
+
+    method = PyObject_GetAttrString(self->filelike, "read");
+
+    if (!method) {
+        PyErr_SetString(PyExc_KeyError,
+                        "file like object has no read() method");
+        return 0;
+    }
+
+    args = Py_BuildValue("(l)", self->blksize);
+    result = PyEval_CallObject(method, args);
+
+    Py_DECREF(method);
+
+    if (!result) {
+        Py_DECREF(args);
+        return 0;
+    }
+
+    if (!PyString_Check(result)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "file like object yielded non string type");
+        Py_DECREF(args);
+        Py_DECREF(result);
+        return 0;
+    }
+
+    if (*PyString_AsString(result) == '\0') {
+        PyErr_SetObject(PyExc_StopIteration, Py_None);
+        Py_DECREF(args);
+        Py_DECREF(result);
+        return 0;
+    }
+
+    Py_DECREF(args);
+
+    return result;
+}
+
+static PyObject *Stream_close(StreamObject *self, PyObject *args)
+{
+    PyObject *method = NULL;
+    PyObject *result = NULL;
+
+    method = PyObject_GetAttrString(self->filelike, "close");
+
+    if (method) {
+        result = PyEval_CallObject(method, (PyObject *)NULL);
+        if (!result)
+            PyErr_Clear();
+        Py_DECREF(method);
+    }
+
+    Py_XDECREF(result);
+
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+static PyMethodDef Stream_methods[] = {
+    { "close",      (PyCFunction)Stream_close,      METH_VARARGS, 0},
+    { NULL, NULL}
+};
+
+static PyTypeObject Stream_Type = {
+    /* The ob_type field must be initialized in the module init function
+     * to be portable to Windows without using C++. */
+    PyObject_HEAD_INIT(NULL)
+    0,                      /*ob_size*/
+    "mod_wsgi.Stream",      /*tp_name*/
+    sizeof(StreamObject),   /*tp_basicsize*/
+    0,                      /*tp_itemsize*/
+    /* methods */
+    (destructor)Stream_dealloc, /*tp_dealloc*/
+    0,                      /*tp_print*/
+    0,                      /*tp_getattr*/
+    0,                      /*tp_setattr*/
+    0,                      /*tp_compare*/
+    0,                      /*tp_repr*/
+    0,                      /*tp_as_number*/
+    0,                      /*tp_as_sequence*/
+    0,                      /*tp_as_mapping*/
+    0,                      /*tp_hash*/
+    0,                      /*tp_call*/
+    0,                      /*tp_str*/
+    0,                      /*tp_getattro*/
+    0,                      /*tp_setattro*/
+    0,                      /*tp_as_buffer*/
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER, /*tp_flags*/
+    0,                      /*tp_doc*/
+    0,                      /*tp_traverse*/
+    0,                      /*tp_clear*/
+    0,                      /*tp_richcompare*/
+    0,                      /*tp_weaklistoffset*/
+    (getiterfunc)Stream_iter, /*tp_iter*/
+    (iternextfunc)Stream_iternext, /*tp_iternext*/
+    Stream_methods,         /*tp_methods*/
     0,                      /*tp_members*/
     0,                      /*tp_getset*/
     0,                      /*tp_base*/
@@ -3866,9 +4479,6 @@ static void wsgi_python_init(apr_pool_t *p)
         else
             Py_OptimizeFlag = 0;
 
-        if (wsgi_server_config->python_executable)
-            Py_SetProgramName((char *)wsgi_server_config->python_executable);
-
         if (wsgi_server_config->python_home)
             Py_SetPythonHome((char *)wsgi_server_config->python_home);
 
@@ -4297,10 +4907,7 @@ static int wsgi_execute_script(request_rec *r)
 
     /* Calculate the Python module name to be used for script. */
 
-    if (config->handler_script && *config->handler_script)
-        script = config->handler_script;
-    else
-        script = r->filename;
+    script = r->filename;
 
     name = wsgi_module_name(r->pool, script);
 
@@ -4336,12 +4943,9 @@ static int wsgi_execute_script(request_rec *r)
             /*
              * Script file has changed. Discard reference to
              * loaded module and work out what action we are
-             * supposed to take. Choices are process reloading,
-             * interpreter reloading and module reloading.
-             * Process reloading cannot be be performed unless a
-             * daemon process is being used and interpreter
-             * reloading cannot be performed on the first
-             * interpreter created by Python.
+             * supposed to take. Choices are process reloading
+             * and module reloading. Process reloading cannot be
+             * performed unless a daemon process is being used.
              */
 
             Py_DECREF(module);
@@ -4377,7 +4981,7 @@ static int wsgi_execute_script(request_rec *r)
                 wsgi_release_interpreter(interp);
 
                 r->status = HTTP_INTERNAL_SERVER_ERROR;
-                r->status_line = "0 Restart";
+                r->status_line = "0 Rejected";
 
                 wsgi_daemon_shutdown++;
                 kill(getpid(), SIGINT);
@@ -4670,6 +5274,7 @@ static void wsgi_python_child_init(apr_pool_t *p)
     /* Finalise any Python objects required by child process. */
 
     PyType_Ready(&Log_Type);
+    PyType_Ready(&Stream_Type);
     PyType_Ready(&Input_Type);
     PyType_Ready(&Adapter_Type);
     PyType_Ready(&Restricted_Type);
@@ -4872,22 +5477,6 @@ static const char *wsgi_set_python_optimize(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
-static const char *wsgi_set_python_executable(cmd_parms *cmd, void *mconfig,
-                                              const char *f)
-{
-    const char *error = NULL;
-    WSGIServerConfig *sconfig = NULL;
-
-    error = ap_check_cmd_context(cmd, GLOBAL_ONLY);
-    if (error != NULL)
-        return error;
-
-    sconfig = ap_get_module_config(cmd->server->module_config, &wsgi_module);
-    sconfig->python_executable = f;
-
-    return NULL;
-}
-
 static const char *wsgi_set_python_home(cmd_parms *cmd, void *mconfig,
                                         const char *f)
 {
@@ -4932,6 +5521,28 @@ static const char *wsgi_set_python_eggs(cmd_parms *cmd, void *mconfig,
 
     sconfig = ap_get_module_config(cmd->server->module_config, &wsgi_module);
     sconfig->python_eggs = f;
+
+    return NULL;
+}
+
+static const char *wsgi_set_restrict_embedded(cmd_parms *cmd, void *mconfig,
+                                              const char *f)
+{
+    const char *error = NULL;
+    WSGIServerConfig *sconfig = NULL;
+
+    error = ap_check_cmd_context(cmd, GLOBAL_ONLY);
+    if (error != NULL)
+        return error;
+
+    sconfig = ap_get_module_config(cmd->server->module_config, &wsgi_module);
+
+    if (strcasecmp(f, "Off") == 0)
+        sconfig->restrict_embedded = 0;
+    else if (strcasecmp(f, "On") == 0)
+        sconfig->restrict_embedded = 1;
+    else
+        return "WSGIRestrictEmbedded must be one of: Off | On";
 
     return NULL;
 }
@@ -5228,24 +5839,6 @@ static const char *wsgi_set_dispatch_script(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
-static const char *wsgi_set_handler_script(cmd_parms *cmd, void *mconfig,
-                                           const char *n)
-{
-    if (cmd->path) {
-        WSGIDirectoryConfig *dconfig = NULL;
-        dconfig = (WSGIDirectoryConfig *)mconfig;
-        dconfig->handler_script = n;
-    }
-    else {
-        WSGIServerConfig *sconfig = NULL;
-        sconfig = ap_get_module_config(cmd->server->module_config,
-                                       &wsgi_module);
-        sconfig->handler_script = n;
-    }
-
-    return NULL;
-}
-
 static const char *wsgi_set_apache_extensions(cmd_parms *cmd, void *mconfig,
                                               const char *f)
 {
@@ -5365,36 +5958,6 @@ static const char *wsgi_set_reload_mechanism(cmd_parms *cmd, void *mconfig,
             return "WSGIReloadMechanism must be one of: "
                    "Module | Process";
         }
-    }
-
-    return NULL;
-}
-
-static const char *wsgi_set_output_buffering(cmd_parms *cmd, void *mconfig,
-                                             const char *f)
-{
-    if (cmd->path) {
-        WSGIDirectoryConfig *dconfig = NULL;
-        dconfig = (WSGIDirectoryConfig *)mconfig;
-
-        if (strcasecmp(f, "Off") == 0)
-            dconfig->output_buffering = 0;
-        else if (strcasecmp(f, "On") == 0)
-            dconfig->output_buffering = 1;
-        else
-            return "WSGIOutputBuffering must be one of: Off | On";
-    }
-    else {
-        WSGIServerConfig *sconfig = NULL;
-        sconfig = ap_get_module_config(cmd->server->module_config,
-                                       &wsgi_module);
-
-        if (strcasecmp(f, "Off") == 0)
-            sconfig->output_buffering = 0;
-        else if (strcasecmp(f, "On") == 0)
-            sconfig->output_buffering = 1;
-        else
-            return "WSGIOutputBuffering must be one of: Off | On";
     }
 
     return NULL;
@@ -5690,6 +6253,31 @@ static void wsgi_build_environment(request_rec *r)
     ap_add_cgi_vars(r);
     ap_add_common_vars(r);
 
+    /*
+     * Mutate a HEAD request into a GET request. This is
+     * required because WSGI specification doesn't lay out
+     * clearly how WSGI applications should treat a HEAD
+     * request. Generally authors of WSGI applications or
+     * frameworks take it that they do not need to return any
+     * content, but this screws up any Apache output filters
+     * which need to see all the response content in order to
+     * correctly set up response headers for a HEAD request such
+     * that they are the same as a GET request. Thus change a
+     * HEAD request into a GET request to ensure that request
+     * content is generated. If using Apache 2.X we can skip
+     * doing this if we know there is no output filter that
+     * might change the content and/or headers.
+     */
+
+#if AP_SERVER_MAJORVERSION_NUMBER >= 2
+    if (r->method_number == M_GET && r->header_only &&
+        r->output_filters->frec->ftype < AP_FTYPE_PROTOCOL)
+        apr_table_setn(r->subprocess_env, "REQUEST_METHOD", "GET");
+#else
+    if (r->method_number == M_GET && r->header_only)
+        apr_table_setn(r->subprocess_env, "REQUEST_METHOD", "GET");
+#endif
+
     /* Determine whether connection uses HTTPS protocol. */
 
 #if AP_SERVER_MAJORVERSION_NUMBER >= 2
@@ -5772,15 +6360,10 @@ static void wsgi_build_environment(request_rec *r)
     apr_table_setn(r->subprocess_env, "mod_wsgi.callable_object",
                    config->callable_object);
 
-    apr_table_setn(r->subprocess_env, "mod_wsgi.handler_script",
-                   config->handler_script);
-
     apr_table_setn(r->subprocess_env, "mod_wsgi.script_reloading",
                    apr_psprintf(r->pool, "%d", config->script_reloading));
     apr_table_setn(r->subprocess_env, "mod_wsgi.reload_mechanism",
                    apr_psprintf(r->pool, "%d", config->reload_mechanism));
-    apr_table_setn(r->subprocess_env, "mod_wsgi.output_buffering",
-                   apr_psprintf(r->pool, "%d", config->output_buffering));
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
     apr_table_setn(r->subprocess_env, "mod_wsgi.listener_host",
@@ -6218,55 +6801,6 @@ static int wsgi_execute_dispatch(request_rec *r)
                 object = NULL;
             }
 
-            /* Now check handler_script(). */
-
-            if (status == OK)
-                object = PyDict_GetItemString(module_dict, "handler_script");
-
-            if (object) {
-                PyObject *result = NULL;
-
-                if (adapter) {
-                    Py_INCREF(object);
-                    args = Py_BuildValue("(O)", vars);
-                    result = PyEval_CallObject(object, args);
-                    Py_DECREF(args);
-                    Py_DECREF(object);
-
-                    if (result) {
-                        if (result != Py_None) {
-                            if (PyString_Check(result)) {
-                                const char *s;
-
-                                s = PyString_AsString(result);
-                                s = apr_pstrdup(r->pool, s);
-                                s = wsgi_callable_object(r, s);
-                                config->handler_script = s;
-
-                                apr_table_setn(r->subprocess_env,
-                                               "mod_wsgi.handler_script",
-                                               config->handler_script);
-                            }
-                            else {
-                                PyErr_SetString(PyExc_TypeError, "Handler "
-                                                "script must be a string "
-                                                "object");
-
-                                status = HTTP_INTERNAL_SERVER_ERROR;
-                            }
-                        }
-
-                        Py_DECREF(result);
-                    }
-                    else
-                        status = HTTP_INTERNAL_SERVER_ERROR;
-                }
-                else
-                    Py_DECREF(object);
-
-                object = NULL;
-            }
-
             /*
              * Wipe out references to Apache request object
              * held by Python objects, so can detect when an
@@ -6479,6 +7013,18 @@ static int wsgi_hook_handler(request_rec *r)
         return status;
 #endif
 
+#if defined(MOD_WSGI_DISABLE_EMBEDDED)
+    wsgi_log_script_error(r, "Embedded mode of mod_wsgi disabled at compile "
+                          "time", r->filename);
+    return HTTP_INTERNAL_SERVER_ERROR;
+#endif
+
+    if (wsgi_server_config->restrict_embedded == 1) {
+        wsgi_log_script_error(r, "Embedded mode of mod_wsgi disabled by "
+                              "runtime configuration", r->filename);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
     return wsgi_execute_script(r);
 }
 
@@ -6541,12 +7087,6 @@ static const command_rec wsgi_commands[] =
 
     { "WSGIPythonOptimize", wsgi_set_python_optimize, NULL,
         RSRC_CONF, TAKE1, "Set level of Python compiler optimisations." },
-#if 0
-#ifndef WIN32
-    { "WSGIPythonExecutable", wsgi_set_python_executable, NULL,
-        RSRC_CONF, TAKE1, "Python executable absolute path name." },
-#endif
-#endif
     { "WSGIPythonHome", wsgi_set_python_home, NULL,
         RSRC_CONF, TAKE1, "Python prefix/exec_prefix absolute path names." },
     { "WSGIPythonPath", wsgi_set_python_path, NULL,
@@ -6554,6 +7094,8 @@ static const command_rec wsgi_commands[] =
     { "WSGIPythonEggs", wsgi_set_python_eggs, NULL,
         RSRC_CONF, TAKE1, "Python eggs cache directory." },
 
+    { "WSGIRestrictEmbedded", wsgi_set_restrict_embedded, NULL,
+        RSRC_CONF, TAKE1, "Enable/Disable use of embedded mode." },
     { "WSGIRestrictStdin", wsgi_set_restrict_stdin, NULL,
         RSRC_CONF, TAKE1, "Enable/Disable restrictions on use of STDIN." },
     { "WSGIRestrictStdout", wsgi_set_restrict_stdout, NULL,
@@ -6573,19 +7115,15 @@ static const command_rec wsgi_commands[] =
         RSRC_CONF, RAW_ARGS, "Location of WSGI import script." },
     { "WSGIDispatchScript", wsgi_set_dispatch_script, NULL,
         ACCESS_CONF|RSRC_CONF, RAW_ARGS, "Location of WSGI dispatch script." },
-    { "WSGIHandlerScript", wsgi_set_handler_script, NULL,
-        ACCESS_CONF|RSRC_CONF, TAKE1, "Location of WSGI handler script." },
 
     { "WSGIApacheExtensions", wsgi_set_apache_extensions, NULL,
         ACCESS_CONF|RSRC_CONF, TAKE1, "Enable/Disable Apache extensions." },
     { "WSGIPassAuthorization", wsgi_set_pass_authorization, NULL,
-        ACCESS_CONF|RSRC_CONF, TAKE1, "Enable/Disable WSGI authorization." },
+        OR_FILEINFO, TAKE1, "Enable/Disable WSGI authorization." },
     { "WSGIScriptReloading", wsgi_set_script_reloading, NULL,
         OR_FILEINFO, TAKE1, "Enable/Disable script reloading mechanism." },
     { "WSGIReloadMechanism", wsgi_set_reload_mechanism, NULL,
         OR_FILEINFO, TAKE1, "Defines what is reloaded when a reload occurs." },
-    { "WSGIOutputBuffering", wsgi_set_output_buffering, NULL,
-        OR_FILEINFO, TAKE1, "Enable/Disable buffering of response." },
 
     { NULL }
 };
@@ -6683,6 +7221,9 @@ typedef struct {
     int shutdown_timeout;
     apr_time_t deadlock_timeout;
     apr_time_t inactivity_timeout;
+    const char *display_name;
+    int send_buffer_size;
+    int recv_buffer_size;
     const char *socket;
     int listener_fd;
     const char* mutex_path;
@@ -6739,6 +7280,11 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     int shutdown_timeout = 5;
     int deadlock_timeout = 300;
     int inactivity_timeout = 0;
+
+    const char *display_name = NULL;
+
+    int send_buffer_size = 0;
+    int recv_buffer_size = 0;
 
     uid_t uid;
     uid_t gid;
@@ -6847,6 +7393,7 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
 
             python_eggs = value;
         }
+#if (APR_MAJOR_VERSION >= 1)
         else if (strstr(option, "stack-size=") == option) {
             value = option + 11;
             if (!*value)
@@ -6856,6 +7403,7 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
             if (stack_size <= 0)
                 return "Invalid stack size for WSGI daemon process.";
         }
+#endif
         else if (strstr(option, "maximum-requests=") == option) {
             value = option + 17;
             if (!*value)
@@ -6891,6 +7439,33 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
             inactivity_timeout = atoi(value);
             if (inactivity_timeout < 0)
                 return "Invalid inactivity timeout for WSGI daemon process.";
+        }
+        else if (strstr(option, "display-name=") == option) {
+            value = option + 13;
+
+            display_name = value;
+        }
+        else if (strstr(option, "send-buffer-size=") == option) {
+            value = option + 17;
+            if (!*value)
+                return "Invalid send buffer size for WSGI daemon process.";
+
+            send_buffer_size = atoi(value);
+            if (send_buffer_size < 512 && send_buffer_size != 0) {
+                return "Send buffer size must be >= 512 bytes, "
+                       "or 0 for system default.";
+            }
+        }
+        else if (strstr(option, "receive-buffer-size=") == option) {
+            value = option + 20;
+            if (!*value)
+                return "Invalid receive buffer size for WSGI daemon process.";
+
+            recv_buffer_size = atoi(value);
+            if (recv_buffer_size < 512 && recv_buffer_size != 0) {
+                return "Receive buffer size must be >= 512 bytes, "
+                       "or 0 for system default.";
+            }
         }
         else
             return "Invalid option to WSGI daemon process definition.";
@@ -6941,6 +7516,11 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     entry->shutdown_timeout = shutdown_timeout;
     entry->deadlock_timeout = apr_time_from_sec(deadlock_timeout);
     entry->inactivity_timeout = apr_time_from_sec(inactivity_timeout);
+
+    entry->display_name = display_name;
+
+    entry->send_buffer_size = send_buffer_size;
+    entry->recv_buffer_size = recv_buffer_size;
 
     return NULL;
 }
@@ -7165,6 +7745,45 @@ static void wsgi_manage_process(int reason, void *data, apr_wait_t status)
     }
 }
 
+static void wsgi_setup_daemon_name(WSGIDaemonProcess *daemon, apr_pool_t *p)
+{
+    const char *display_name = NULL;
+
+    int slen = 0;
+    int dlen = 0;
+
+    char *argv0 = NULL;
+
+    display_name = daemon->group->display_name;
+
+    if (!display_name)
+        return;
+
+    if (!strcmp(display_name, "%{GROUP}")) {
+        display_name = apr_pstrcat(p, "(wsgi:", daemon->group->name,
+                                   ")", NULL);
+    }
+
+    /*
+     * Only argv[0] is guaranteed to be the real things as MPM
+     * modules may make modifications to subsequent arguments.
+     * Thus can only replace the argv[0] value. Because length
+     * is restricted, need to truncate display name if too long.
+     */
+
+    argv0 = (char*)wsgi_server->process->argv[0];
+
+    dlen = strlen(argv0);
+    slen = strlen(display_name);
+
+    memset(argv0, ' ', dlen);
+
+    if (slen < dlen)
+        memcpy(argv0, display_name, slen);
+    else
+        memcpy(argv0, display_name, dlen);
+}
+
 static void wsgi_setup_access(WSGIDaemonProcess *daemon)
 {
     /* Setup the umask for the effective user. */
@@ -7196,7 +7815,7 @@ static void wsgi_setup_access(WSGIDaemonProcess *daemon)
         else {
             ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(errno), wsgi_server,
                          "mod_wsgi (pid=%d): Unable to determine home "
-                         "directory for uid=%ld.", getpid(), geteuid());
+                         "directory for uid=%ld.", getpid(), (long)geteuid());
         }
     }
     else {
@@ -7215,7 +7834,7 @@ static void wsgi_setup_access(WSGIDaemonProcess *daemon)
             ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(errno), wsgi_server,
                          "mod_wsgi (pid=%d): Unable to determine home "
                          "directory for uid=%ld.", getpid(),
-                         daemon->group->uid);
+                         (long)daemon->group->uid);
         }
     }
 
@@ -7256,6 +7875,9 @@ static int wsgi_setup_socket(WSGIProcessGroup *process)
     mode_t omask;
     int rc;
 
+    int sendsz = process->send_buffer_size;
+    int recvsz = process->recv_buffer_size;
+
     ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
                  "mod_wsgi (pid=%d): Socket for '%s' is '%s'.",
                  getpid(), process->name, process->socket);
@@ -7266,6 +7888,27 @@ static int wsgi_setup_socket(WSGIProcessGroup *process)
                      "socket.", getpid());
         return -1;
     }
+
+#ifdef SO_SNDBUF
+    if (sendsz) {
+        if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF,
+                       (void *)&sendsz, sizeof(sendsz)) == -1) {
+            ap_log_error(APLOG_MARK, WSGI_LOG_WARNING(errno), wsgi_server,
+                         "mod_wsgi (pid=%d): Failed to set send buffer "
+                         "size on daemon process socket.", getpid());
+        }
+    }
+#endif
+#ifdef SO_RCVBUF
+    if (recvsz) {
+        if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF,
+                       (void *)&recvsz, sizeof(recvsz)) == -1) {
+            ap_log_error(APLOG_MARK, WSGI_LOG_WARNING(errno), wsgi_server,
+                         "mod_wsgi (pid=%d): Failed to set receive buffer "
+                         "size on daemon process socket.", getpid());
+        }
+    }
+#endif
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -7766,9 +8409,11 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
     apr_threadattr_create(&thread_attr, p);
     apr_threadattr_detach_set(thread_attr, 0);
 
+#if (APR_MAJOR_VERSION >= 1)
     if (daemon->group->stack_size) {
         apr_threadattr_stacksize_set(thread_attr, daemon->group->stack_size);
     }
+#endif
 
     /* Start monitoring thread if required. */
 
@@ -7895,6 +8540,10 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
     ap_listen_rec *lr;
 
+    WSGIProcessGroup *entries = NULL;
+    WSGIProcessGroup *entry = NULL;
+    int i = 0;
+
     if ((status = apr_proc_fork(&daemon->process, p)) < 0) {
         ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(errno), wsgi_server,
                      "mod_wsgi: Couldn't spawn process '%s'.",
@@ -7931,6 +8580,10 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
                          getpid());
         }
 #endif
+
+        /* Setup daemon process name displayed by 'ps'. */
+
+        wsgi_setup_daemon_name(daemon, p);
 
         /* Setup daemon process user/group/umask etc. */
 
@@ -7988,6 +8641,22 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
          */
 
         ap_close_listeners();
+
+        /*
+         * Wipe out random value used in magic token so that not
+         * possible for user code running in daemon process to
+         * discover this value for other daemon process groups.
+         * In other words, wipe out all but our own.
+         */
+
+        entries = (WSGIProcessGroup *)wsgi_daemon_list->elts;
+
+        for (i = 0; i < wsgi_daemon_list->nelts; ++i) {
+            entry = &entries[i];
+
+            if (entry != daemon->group)
+                entry->random = 0;
+        }
 
         /*
          * Register signal handler to receive shutdown signal
@@ -8341,35 +9010,43 @@ static apr_status_t wsgi_socket_send(int fd, const void *buf, size_t buf_size)
     return APR_SUCCESS;
 }
 
-static apr_status_t wsgi_send_string(int fd, const char *s)
+static apr_status_t wsgi_send_strings(apr_pool_t *p, int fd, const char **s)
 {
     apr_status_t rv;
-    int l;
 
-    l = strlen(s);
+    apr_size_t total = 0;
 
-    if ((rv = wsgi_socket_send(fd, &l, sizeof(l))) != APR_SUCCESS)
-        return rv;
+    apr_size_t n;
+    apr_size_t i;
+    apr_size_t l;
 
-    return wsgi_socket_send(fd, s, l);
-}
+    char *buffer;
+    char *offset;
 
-static apr_status_t wsgi_send_strings(int fd, const char **s)
-{
-    apr_status_t rv;
-    int n;
-    int i;
+    total += sizeof(n);
 
     for (n = 0; s[n]; n++)
-        continue;
+        total += (strlen(s[n]) + 1);
 
-    if ((rv = wsgi_socket_send(fd, &n, sizeof(n))) != APR_SUCCESS)
-        return rv;
+    buffer = apr_palloc(p, total + sizeof(total));
+    offset = buffer;
+
+    memcpy(offset, &total, sizeof(total));
+    offset += sizeof(total);
+
+    memcpy(offset, &n, sizeof(n));
+    offset += sizeof(n);
 
     for (i = 0; i < n; i++) {
-        if ((rv = wsgi_send_string(fd, s[i])) != APR_SUCCESS)
-            return rv;
+        l = (strlen(s[i]) + 1);
+        memcpy(offset, s[i], l);
+        offset += l;
     }
+
+    total += sizeof(total);
+
+    if ((rv = wsgi_socket_send(fd, buffer, total)) != APR_SUCCESS)
+        return rv;
 
     return APR_SUCCESS;
 }
@@ -8403,7 +9080,7 @@ static apr_status_t wsgi_send_request(request_rec *r,
 
     vars[j] = NULL;
 
-    rv = wsgi_send_strings(daemon->fd, (const char **)vars);
+    rv = wsgi_send_strings(r->pool, daemon->fd, (const char **)vars);
 
     if (rv != APR_SUCCESS)
         return rv;
@@ -8417,6 +9094,7 @@ static int wsgi_execute_remote(request_rec *r)
     WSGIDaemonSocket *daemon = NULL;
     WSGIProcessGroup *group = NULL;
 
+    char *key = NULL;
     char const *hash = NULL;
 
     int status;
@@ -8425,7 +9103,7 @@ static int wsgi_execute_remote(request_rec *r)
     apr_interval_time_t timeout;
     int seen_eos;
     int child_stopped_reading;
-    apr_file_t *tempsock;
+    apr_file_t *tmpsock;
     apr_bucket_brigade *bbout;
     apr_bucket_brigade *bbin;
     apr_bucket *b;
@@ -8504,13 +9182,15 @@ static int wsgi_execute_remote(request_rec *r)
     /*
      * Add magic marker into request environment so that daemon
      * process can verify that request is from a sender that can
-     * be trusted.
+     * be trusted. Wipe out original key to make it a bit harder
+     * for rogue code in Apache child processes to trawl through
+     * memory looking for unhashed string.
      */
 
-    hash = apr_psprintf(r->pool, "%ld|%s|%s|%s", group->random,
-                        group->socket, r->filename,
-                        config->handler_script);
-    hash = ap_md5(r->pool, (const unsigned char *)hash);
+    key = apr_psprintf(r->pool, "%ld|%s|%s", group->random,
+                       group->socket, r->filename);
+    hash = ap_md5(r->pool, (const unsigned char *)key);
+    memset(key, '\0', strlen(key));
 
     apr_table_setn(r->subprocess_env, "mod_wsgi.magic", hash);
 
@@ -8545,13 +9225,13 @@ static int wsgi_execute_remote(request_rec *r)
      * level to close socket.
      */
 
-    apr_os_pipe_put_ex(&tempsock, &daemon->fd, 1, r->pool);
+    apr_os_pipe_put_ex(&tmpsock, &daemon->fd, 1, r->pool);
     apr_pool_cleanup_kill(r->pool, daemon, wsgi_close_socket);
 
     /* Setup bucket brigade for reading response from daemon. */
 
     bbin = apr_brigade_create(r->pool, r->connection->bucket_alloc);
-    b = apr_bucket_pipe_create(tempsock, r->connection->bucket_alloc);
+    b = apr_bucket_pipe_create(tmpsock, r->connection->bucket_alloc);
     APR_BRIGADE_INSERT_TAIL(bbin, b);
     b = apr_bucket_eos_create(r->connection->bucket_alloc);
     APR_BRIGADE_INSERT_TAIL(bbin, b);
@@ -8574,7 +9254,7 @@ static int wsgi_execute_remote(request_rec *r)
          * done, then keep trying to reconnect. Cap the number
          * of retries to at most about 2 times the number of
          * daemon processes in the process group. If still being
-         * told things are being restarted, the we will error
+         * told things are being restarted, then we will error
          * indicating service is unavailable.
          */
 
@@ -8594,12 +9274,19 @@ static int wsgi_execute_remote(request_rec *r)
                 return HTTP_INTERNAL_SERVER_ERROR;
             }
 
-            if (strcmp(r->status_line, "0 Restart"))
+            if (!strcmp(r->status_line, "0 Continue"))
                 break;
+
+            if (strcmp(r->status_line, "0 Rejected")) {
+                ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                             "mod_wsgi (pid=%d): Unexpected status from "
+                             "WSGI daemon process '%d'.", getpid(), r->status);
+                return HTTP_INTERNAL_SERVER_ERROR;
+            }
 
             /* Need to close previous socket connection first. */
 
-            apr_file_close(tempsock);
+            apr_file_close(tmpsock);
 
             /* Has maximum number of attempts been reached. */
 
@@ -8632,13 +9319,13 @@ static int wsgi_execute_remote(request_rec *r)
                 return HTTP_INTERNAL_SERVER_ERROR;
             }
 
-            apr_os_pipe_put_ex(&tempsock, &daemon->fd, 1, r->pool);
+            apr_os_pipe_put_ex(&tmpsock, &daemon->fd, 1, r->pool);
             apr_pool_cleanup_kill(r->pool, daemon, wsgi_close_socket);
 
             apr_brigade_destroy(bbin);
 
             bbin = apr_brigade_create(r->pool, r->connection->bucket_alloc);
-            b = apr_bucket_pipe_create(tempsock, r->connection->bucket_alloc);
+            b = apr_bucket_pipe_create(tmpsock, r->connection->bucket_alloc);
             APR_BRIGADE_INSERT_TAIL(bbin, b);
             b = apr_bucket_eos_create(r->connection->bucket_alloc);
             APR_BRIGADE_INSERT_TAIL(bbin, b);
@@ -8652,8 +9339,8 @@ static int wsgi_execute_remote(request_rec *r)
 
     bbout = apr_brigade_create(r->pool, r->connection->bucket_alloc);
 
-    apr_file_pipe_timeout_get(tempsock, &timeout);
-    apr_file_pipe_timeout_set(tempsock, r->server->timeout);
+    apr_file_pipe_timeout_get(tmpsock, &timeout);
+    apr_file_pipe_timeout_set(tmpsock, r->server->timeout);
 
     do {
         apr_bucket *bucket;
@@ -8698,7 +9385,7 @@ static int wsgi_execute_remote(request_rec *r)
              * much time elapses with no progress or an error
              * occurs.
              */
-            rv = apr_file_write_full(tempsock, data, len, NULL);
+            rv = apr_file_write_full(tmpsock, data, len, NULL);
 
             if (rv != APR_SUCCESS) {
                 /* Daemon stopped reading, discard remainder. */
@@ -8709,7 +9396,7 @@ static int wsgi_execute_remote(request_rec *r)
     }
     while (!seen_eos);
 
-    apr_file_pipe_timeout_set(tempsock, timeout);
+    apr_file_pipe_timeout_set(tmpsock, timeout);
 
     /*
      * Close socket for writing so that daemon detects end of
@@ -8759,38 +9446,38 @@ static apr_status_t wsgi_socket_read(apr_socket_t *sock, void *vbuf,
     return APR_SUCCESS;
 }
 
-static apr_status_t wsgi_read_string(apr_socket_t *sock, char **s,
-                                     apr_pool_t *p)
-{
-    apr_status_t rv;
-    int l;
-
-    if ((rv = wsgi_socket_read(sock, &l, sizeof(l))) != APR_SUCCESS)
-        return rv;
-
-    *s = apr_pcalloc(p, l+1);
-
-    if (!l)
-        return APR_SUCCESS;
-
-    return wsgi_socket_read(sock, *s, l);
-}
-
 static apr_status_t wsgi_read_strings(apr_socket_t *sock, char ***s,
                                       apr_pool_t *p)
 {
     apr_status_t rv;
-    int n;
-    int i;
 
-    if ((rv = wsgi_socket_read(sock, &n, sizeof(n))) != APR_SUCCESS)
+    apr_size_t total;
+
+    apr_size_t n;
+    apr_size_t i;
+    apr_size_t l;
+
+    char *buffer;
+    char *offset;
+
+    if ((rv = wsgi_socket_read(sock, &total, sizeof(total))) != APR_SUCCESS)
         return rv;
+
+    buffer = apr_palloc(p, total);
+    offset = buffer;
+
+    if ((rv = wsgi_socket_read(sock, buffer, total)) != APR_SUCCESS)
+        return rv;
+
+    memcpy(&n, offset, sizeof(n));
+    offset += sizeof(n);
 
     *s = apr_pcalloc(p, (n+1)*sizeof(**s));
 
     for (i = 0; i < n; i++) {
-        if ((rv = wsgi_read_string(sock, &(*s)[i], p)) != APR_SUCCESS)
-            return rv;
+        l = strlen(offset) + 1;
+        (*s)[i] = offset;
+        offset += l;
     }
 
     return APR_SUCCESS;
@@ -8918,7 +9605,6 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     char *key;
     apr_sockaddr_t *addr;
 
-    char const *script;
     char const *magic;
     char const *hash;
 
@@ -8938,7 +9624,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
         return DECLINED;
 
     /*
-     * XXX Remove all input/output filters except the core filters.
+     * Remove all input/output filters except the core filters.
      * This will ensure that any SSL filters we don't want are
      * removed. This is a bit of a hack. Only other option is to
      * duplicate the code for core input/output filters so can
@@ -9099,13 +9785,11 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    script = apr_table_get(r->subprocess_env, "mod_wsgi.handler_script");
-
-    hash = apr_psprintf(r->pool, "%ld|%s|%s|%s",
-                        wsgi_daemon_process->group->random,
-                        wsgi_daemon_process->group->socket, r->filename,
-                        script);
-    hash = ap_md5(r->pool, (const unsigned char *)hash);
+    key = apr_psprintf(r->pool, "%ld|%s|%s",
+                       wsgi_daemon_process->group->random,
+                       wsgi_daemon_process->group->socket, r->filename);
+    hash = ap_md5(r->pool, (const unsigned char *)key);
+    memset(key, '\0', strlen(key));
 
     if (strcmp(magic, hash) != 0) {
         ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(rv), wsgi_server,
@@ -9173,15 +9857,10 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     config->callable_object = apr_table_get(r->subprocess_env,
                                             "mod_wsgi.callable_object");
 
-    config->handler_script = apr_table_get(r->subprocess_env,
-                                           "mod_wsgi.handler_script");
-
     config->script_reloading = atoi(apr_table_get(r->subprocess_env,
                                                   "mod_wsgi.script_reloading"));
     config->reload_mechanism = atoi(apr_table_get(r->subprocess_env,
                                                   "mod_wsgi.reload_mechanism"));
-    config->output_buffering = atoi(apr_table_get(r->subprocess_env,
-                                                  "mod_wsgi.output_buffering"));
 
     /*
      * Define how input data is to be processed. This
@@ -10473,7 +11152,7 @@ static int wsgi_hook_check_user_id(request_rec *r)
 
     int status = -1;
 
-    const char *password;                         
+    const char *password;
 
     InterpreterObject *interp = NULL;
     PyObject *modules = NULL;
@@ -10867,19 +11546,17 @@ static const command_rec wsgi_commands[] =
 
     AP_INIT_TAKE1("WSGIPythonOptimize", wsgi_set_python_optimize,
         NULL, RSRC_CONF, "Set level of Python compiler optimisations."),
-#if 0
 #ifndef WIN32
-    AP_INIT_TAKE1("WSGIPythonExecutable", wsgi_set_python_executable,
-        NULL, RSRC_CONF, "Python executable absolute path name."),
-#endif
-#endif
     AP_INIT_TAKE1("WSGIPythonHome", wsgi_set_python_home,
         NULL, RSRC_CONF, "Python prefix/exec_prefix absolute path names."),
+#endif
     AP_INIT_TAKE1("WSGIPythonPath", wsgi_set_python_path,
         NULL, RSRC_CONF, "Python module search path."),
     AP_INIT_TAKE1("WSGIPythonEggs", wsgi_set_python_eggs,
         NULL, RSRC_CONF, "Python eggs cache directory."),
 
+    AP_INIT_TAKE1("WSGIRestrictEmbedded", wsgi_set_restrict_embedded,
+        NULL, RSRC_CONF, "Enable/Disable use of embedded mode."),
     AP_INIT_TAKE1("WSGIRestrictStdin", wsgi_set_restrict_stdin,
         NULL, RSRC_CONF, "Enable/Disable restrictions on use of STDIN."),
     AP_INIT_TAKE1("WSGIRestrictStdout", wsgi_set_restrict_stdout,
@@ -10906,19 +11583,15 @@ static const command_rec wsgi_commands[] =
         NULL, RSRC_CONF, "Location of WSGI import script."),
     AP_INIT_RAW_ARGS("WSGIDispatchScript", wsgi_set_dispatch_script,
         NULL, ACCESS_CONF|RSRC_CONF, "Location of WSGI dispatch script."),
-    AP_INIT_TAKE1("WSGIHandlerScript", wsgi_set_handler_script,
-        NULL, ACCESS_CONF|RSRC_CONF, "Location of WSGI handler script."),
 
     AP_INIT_TAKE1("WSGIApacheExtensions", wsgi_set_apache_extensions,
-         NULL, ACCESS_CONF|RSRC_CONF, "Enable/Disable Apache extensions."),
+        NULL, ACCESS_CONF|RSRC_CONF, "Enable/Disable Apache extensions."),
     AP_INIT_TAKE1("WSGIPassAuthorization", wsgi_set_pass_authorization,
-         NULL, ACCESS_CONF|RSRC_CONF, "Enable/Disable WSGI authorization."),
+        NULL, OR_FILEINFO, "Enable/Disable WSGI authorization."),
     AP_INIT_TAKE1("WSGIScriptReloading", wsgi_set_script_reloading,
         NULL, OR_FILEINFO, "Enable/Disable script reloading mechanism."),
     AP_INIT_TAKE1("WSGIReloadMechanism", wsgi_set_reload_mechanism,
         NULL, OR_FILEINFO, "Defines what is reloaded when a reload occurs."),
-    AP_INIT_TAKE1("WSGIOutputBuffering", wsgi_set_output_buffering,
-        NULL, OR_FILEINFO, "Enable/Disable buffering of response."),
 
 #if defined(MOD_WSGI_WITH_AAA_HANDLERS)
     AP_INIT_RAW_ARGS("WSGIAccessScript", wsgi_set_access_script,
