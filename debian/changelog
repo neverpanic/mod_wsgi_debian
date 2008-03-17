@@ -1,3 +1,9 @@
+mod-wsgi (2.0~c5-3) experimental; urgency=low
+
+  * New beta version.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 17 Mar 2008 22:56:06 +0100
+
 mod-wsgi (2.0~c4-2) experimental; urgency=low
 
   * Rename mod_wsgi.load to wsgi.load to follow
