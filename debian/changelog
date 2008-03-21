@@ -1,3 +1,10 @@
+mod-wsgi (2.0-1) unstable; urgency=low
+
+  * New upstream version.
+  * Merging changes of the experimental uploads.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Fri, 21 Mar 2008 11:49:44 +0100
+
 mod-wsgi (2.0~c5-1) experimental; urgency=low
 
   * New beta version.
