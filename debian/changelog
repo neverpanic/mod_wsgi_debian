@@ -1,3 +1,18 @@
+mod-wsgi (2.1-1) unstable; urgency=low
+
+  * New upstream release.
+  * debian/libapache2-mod-wsgi.rtupdate:
+    - Fixing bashism. Thanks to Vitaliyi (Closes: #483197)
+  * debian/copyright:
+    - Removing full text of the Apache License, linking to
+      /usr/share/common-licenses/Apache-2.0 instead.
+  * debian/wsgi.conf:
+    - Removing WSGIPythonExecutable directive from the example configuration
+      as it does not exist in 2.X versions of mod-wsgi. Thanks to Martin
+      Tomasek for the report. (Closes: #488982)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 07 Jul 2008 00:37:50 +0200
+
 mod-wsgi (2.0-1) unstable; urgency=low
 
   * New upstream version.

@@ -244,9 +244,9 @@ static char *apr_off_t_toa(apr_pool_t *p, apr_off_t n)
 
 /* Version and module information. */
 
-#define MOD_WSGI_MAJORVERSION_NUMBER 1
-#define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "2.0"
+#define MOD_WSGI_MAJORVERSION_NUMBER 2
+#define MOD_WSGI_MINORVERSION_NUMBER 1
+#define MOD_WSGI_VERSION_STRING "2.1-BRANCH"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -3084,7 +3084,7 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
                     self->result = OK;
             }
 
-            Py_DECREF(iterator);
+            Py_XDECREF(iterator);
         }
 
         if (PyErr_Occurred()) {
@@ -9705,7 +9705,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     r->read_length = 0;
     r->read_body = REQUEST_NO_BODY;
 
-    r->status = HTTP_INTERNAL_SERVER_ERROR;
+    r->status = HTTP_OK;
     r->the_request = NULL;
 
     r->used_path_info = AP_REQ_DEFAULT_PATH_INFO;
