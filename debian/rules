@@ -11,6 +11,7 @@ include /usr/share/dpatch/dpatch.make
 
 APXS2=/usr/bin/apxs2
 PYVERS=$(shell pyversions -vs)
+PYDEFAULT=$(shell pyversions -dv)
 PYMIN=$(shell echo $(PYVERS) | awk '{print $$1}')
 PYMAX=$(shell echo $(PYVERS) | LANG=C awk '{print $$NF+0.1}')
 
@@ -60,7 +61,7 @@ binary-arch: build install
 	install -d -m 755 debian/$(PACKAGE)/usr/share/python/runtime.d
 	install -m 755 debian/*.rtupdate debian/$(PACKAGE)/usr/share/python/runtime.d/
 	dh_installman
-	dh_link
+	dh_link usr/lib/apache2/modules/mod_wsgi.so-$(PYDEFAULT) usr/lib/apache2/modules/mod_wsgi.so
 	dh_strip
 	dh_compress
 	dh_fixperms
