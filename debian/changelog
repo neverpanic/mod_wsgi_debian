@@ -1,4 +1,4 @@
-mod-wsgi (2.1-2) UNRELEASED; urgency=medium
+mod-wsgi (2.1-2) unstable; urgency=medium
 
   * Calling pyversions in postinst requires that 'python' is installed *and*
     configured, so it would need to be added to Pre-Depends. As this is kinda
@@ -13,7 +13,7 @@ mod-wsgi (2.1-2) UNRELEASED; urgency=medium
     and the fix was for a long enough time in testing, it should be safe to
     remove them before Lenny.
 
- -- Bernd Zeimetz <bzed@debian.org>  Sun, 20 Jul 2008 23:09:41 +0200
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 21 Jul 2008 01:20:43 +0200
 
 mod-wsgi (2.1-1) unstable; urgency=low
 
