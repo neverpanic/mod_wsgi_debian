@@ -1,3 +1,20 @@
+mod-wsgi (2.1-2) UNRELEASED; urgency=medium
+
+  * Calling pyversions in postinst requires that 'python' is installed *and*
+    configured, so it would need to be added to Pre-Depends. As this is kinda
+    ugly, we ship the symlink to the module for the right Python version now
+    in the package. I assume that this will really fix #483197 now, I'm quite
+    sure that the broken link results from an error message of the
+    unconfigured python/pyversions. Shipping the symlink also makes sure that
+    it is available while Apache is configured (which may happen before
+    mod-wsgi is configured). (Closes: #483197, #491478)
+  * Drop the parts from the maintainer scripts which renamed the wsgi config
+    files (see #456737 for details) - as mod-wsgi was not released with Etch
+    and the fix was for a long enough time in testing, it should be safe to
+    remove them before Lenny.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sun, 20 Jul 2008 23:09:41 +0200
+
 mod-wsgi (2.1-1) unstable; urgency=low
 
   * New upstream release.
