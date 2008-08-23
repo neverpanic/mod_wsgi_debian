@@ -5,7 +5,7 @@ mod-wsgi (2.3-1) unstable; urgency=low
     mod-wsgi 2.2 is mainly bugfix-releases. The only exception is a backport
     of one function from 3.0 which allows the setting of process names on *BSD
     - this does not affect Linux.
-    mod-wsgi 2.3 fixes a regression which was introduces in 2.2.
+    mod-wsgi 2.3 fixes regressions which were introduced in 2.2.
     
     Here follows a list of the bugfixes in 2.2:
       1. Fix bug whereby if mod_python is loaded at same time as mod_wsgi the
