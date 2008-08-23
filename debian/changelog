@@ -1,3 +1,52 @@
+mod-wsgi (2.3-1) unstable; urgency=low
+
+  * New upstream release (Closes: #496067). This upload covers the changes of
+    mod-wsgi 2.2 and 2.3.
+    mod-wsgi 2.2 is mainly bugfix-releases. The only exception is a backport
+    of one function from 3.0 which allows the setting of process names on *BSD
+    - this does not affect Linux.
+    mod-wsgi 2.3 fixes a regression which was introduces in 2.2.
+    
+    Here follows a list of the bugfixes in 2.2:
+      1. Fix bug whereby if mod_python is loaded at same time as mod_wsgi the
+         WSGIImportScript directive can cause Apache child processes to crash.
+         For details see: http://code.google.com/p/modwsgi/issues/detail?id=91
+
+      2. Fix bug where mod_wsgi daemon process startup could fail due to old
+         stale UNIX listener socket file as described in:
+         http://code.google.com/p/modwsgi/issues/detail?id=77 
+
+      3. Fix bug where listener socket file descriptors for daemon processes
+         were being leaked in Apache parent process on a graceful restart.
+         Also fixes problem where UNIX listener socket was left in filesystem
+         on both graceful restart and graceful shutdown. For details see:
+         http://code.google.com/p/modwsgi/issues/detail?id=95 
+
+      4. Fix bug where response was truncated when a null character appeared
+         as first character in block of data being returned from
+         wsgi.file_wrapper.
+         Only occurred when code fell back to using iteration over supplied
+         file like object, rather than optimised method such as sendfile().
+         http://code.google.com/p/modwsgi/issues/detail?id=100
+
+    The following regressions/bugs of 2.2 were fixed in 2.3:
+
+      1. Fixed problem introduced in version 2.2 of mod_wsgi whereby use of
+         daemon mode would cause CGI scripts to fail. It is quite possible
+         that the bug could also have caused failures with other Apache
+         modules that relied on registering of cleanup functions against
+         Apache configuration memory pool.
+
+      2. (does not affect Linux)
+         When using setproctitle() on BSD systems, first argument should be
+         a printf style format string with values to fill out per format as
+         additional arguments. Code was supplying value to be displayed as
+         format string which meant that if it contained any printf type format
+         sequences, could cause process to crash as corresponding arguments
+         wouldn't have ben provided.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 23 Aug 2008 19:27:48 +0200
+
 mod-wsgi (2.1-2) unstable; urgency=medium
 
   * Calling pyversions in postinst requires that 'python' is installed *and*
