@@ -1,3 +1,9 @@
+mod-wsgi (2.3-1~bpo40+1) etch-backports; urgency=low
+
+  * Rebuild for etch-backports.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Thu, 04 Sep 2008 01:33:00 +0200
+
 mod-wsgi (2.3-1) unstable; urgency=low
 
   * New upstream release (Closes: #496067). This upload covers the changes of
