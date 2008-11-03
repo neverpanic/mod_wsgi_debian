@@ -1,3 +1,10 @@
+mod-wsgi (2.3-2) UNRELEASED; urgency=low
+
+  * debian/control
+    - switch Vcs-Browser field to viewsvn
+
+ -- Sandro Tosi <morph@debian.org>  Mon, 03 Nov 2008 22:13:38 +0100
+
 mod-wsgi (2.3-1) unstable; urgency=low
 
   * New upstream release (Closes: #496067). This upload covers the changes of
