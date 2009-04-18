@@ -1,7 +1,7 @@
 /* vim: set sw=4 expandtab : */
 
 /*
- * Copyright 2007-2008 GRAHAM DUMPLETON
+ * Copyright 2007-2009 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -245,8 +245,8 @@ static char *apr_off_t_toa(apr_pool_t *p, apr_off_t n)
 /* Version and module information. */
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 2
-#define MOD_WSGI_MINORVERSION_NUMBER 2
-#define MOD_WSGI_VERSION_STRING "2.3"
+#define MOD_WSGI_MINORVERSION_NUMBER 4
+#define MOD_WSGI_VERSION_STRING "2.4"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -1055,6 +1055,20 @@ static void Log_dealloc(LogObject *self)
     PyObject_Del(self);
 }
 
+static PyObject *Log_close(LogObject *self, PyObject *args)
+{
+    if (self->expired) {
+        PyErr_SetString(PyExc_RuntimeError, "log object has expired");
+        return NULL;
+    }
+
+    if (!PyArg_ParseTuple(args, ":close"))
+        return NULL;
+
+    PyErr_SetString(PyExc_RuntimeError, "log object cannot be closed");
+    return NULL;
+}
+
 static PyObject *Log_flush(LogObject *self, PyObject *args)
 {
     if (self->expired) {
@@ -1247,11 +1261,30 @@ static PyObject *Log_writelines(LogObject *self, PyObject *args)
     return Py_None;
 }
 
+static PyObject *Log_closed(LogObject *self, void *closure)
+{
+    Py_INCREF(Py_False);
+    return Py_False;
+}
+
+static PyObject *Log_isatty(LogObject *self, void *closure)
+{
+    Py_INCREF(Py_False);
+    return Py_False;
+}
+
 static PyMethodDef Log_methods[] = {
-    { "flush",      (PyCFunction)Log_flush,      METH_VARARGS, 0},
-    { "write",      (PyCFunction)Log_write,      METH_VARARGS, 0},
-    { "writelines", (PyCFunction)Log_writelines, METH_VARARGS, 0},
+    { "close",      (PyCFunction)Log_close,      METH_VARARGS, 0 },
+    { "flush",      (PyCFunction)Log_flush,      METH_VARARGS, 0 },
+    { "write",      (PyCFunction)Log_write,      METH_VARARGS, 0 },
+    { "writelines", (PyCFunction)Log_writelines, METH_VARARGS, 0 },
     { NULL, NULL}
+};
+
+static PyGetSetDef Log_getset[] = {
+    { "closed", (getter)Log_closed, NULL, 0 },
+    { "isatty", (getter)Log_isatty, NULL, 0 },
+    { NULL },
 };
 
 static PyTypeObject Log_Type = {
@@ -1288,7 +1321,7 @@ static PyTypeObject Log_Type = {
     0,                      /*tp_iternext*/
     Log_methods,            /*tp_methods*/
     0,                      /*tp_members*/
-    0,                      /*tp_getset*/
+    Log_getset,             /*tp_getset*/
     0,                      /*tp_base*/
     0,                      /*tp_dict*/
     0,                      /*tp_descr_get*/
@@ -1684,14 +1717,16 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
          */
 
         while (!self->done) {
-            /* Increase the size of the string by 25%. */
+            if (length == size) {
+                /* Increase the size of the string by 25%. */
 
-            size = size + (size >> 2);
+                size = size + (size >> 2);
 
-            if (_PyString_Resize(&result, size))
-                return NULL;
+                if (_PyString_Resize(&result, size))
+                    return NULL;
 
-            buffer = PyString_AS_STRING((PyStringObject *)result);
+                buffer = PyString_AS_STRING((PyStringObject *)result);
+            }
 
             /* Now make succesive attempt at reading data. */
 
@@ -1992,7 +2027,7 @@ static PyObject *Input_readline(InputObject *self, PyObject *args)
                     memcpy(self->buffer, p, self->size);
                 }
 
-                if (buffer[length-1] != '\n') {
+                if (buffer[length-1] != '\n' && length == size) {
                     /* Increase size of string and keep going. */
 
                     size = size + (size >> 2);
@@ -2082,10 +2117,10 @@ static PyObject *Input_readlines(InputObject *self, PyObject *args)
 }
 
 static PyMethodDef Input_methods[] = {
-    { "close",     (PyCFunction)Input_close,     METH_VARARGS, 0},
-    { "read",      (PyCFunction)Input_read,      METH_VARARGS, 0},
-    { "readline",  (PyCFunction)Input_readline,  METH_VARARGS, 0},
-    { "readlines", (PyCFunction)Input_readlines, METH_VARARGS, 0},
+    { "close",     (PyCFunction)Input_close,     METH_VARARGS, 0 },
+    { "read",      (PyCFunction)Input_read,      METH_VARARGS, 0 },
+    { "readline",  (PyCFunction)Input_readline,  METH_VARARGS, 0 },
+    { "readlines", (PyCFunction)Input_readlines, METH_VARARGS, 0 },
     { NULL, NULL}
 };
 
@@ -2422,6 +2457,13 @@ static int Adapter_output(AdapterObject *self, const char *data, int length)
                 return 0;
             }
 
+            if (strchr(name, '\n') != 0 || strchr(value, '\n') != 0) {
+                PyErr_Format(PyExc_ValueError, "embedded newline in "
+                             "response header with name '%s' and value '%s'",
+                             name, value);
+                return 0;
+            }
+
             if (!strcasecmp(name, "Content-Type")) {
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
                 r->content_type = apr_pstrdup(r->pool, value);
@@ -2685,6 +2727,9 @@ static int Adapter_output_file(AdapterObject *self, apr_file_t* tmpfile,
 
     APR_BRIGADE_INSERT_TAIL(bb, b);
 
+    b = apr_bucket_flush_create(r->connection->bucket_alloc);
+    APR_BRIGADE_INSERT_TAIL(bb, b);
+
     b = apr_bucket_eos_create(r->connection->bucket_alloc);
     APR_BRIGADE_INSERT_TAIL(bb, b);
 
@@ -2799,6 +2844,13 @@ static PyObject *Adapter_environ(AdapterObject *self)
 
     object = PyObject_GetAttrString((PyObject *)self, "file_wrapper");
     PyDict_SetItemString(vars, "wsgi.file_wrapper", object);
+    Py_DECREF(object);
+
+    /* Add mod_wsgi version information. */
+
+    object = Py_BuildValue("(ii)", MOD_WSGI_MAJORVERSION_NUMBER,
+                           MOD_WSGI_MINORVERSION_NUMBER);
+    PyDict_SetItemString(vars, "mod_wsgi.version", object);
     Py_DECREF(object);
 
     /*
@@ -3205,9 +3257,9 @@ static PyObject *Adapter_file_wrapper(AdapterObject *self, PyObject *args)
 }
 
 static PyMethodDef Adapter_methods[] = {
-    { "start_response", (PyCFunction)Adapter_start_response, METH_VARARGS, 0},
-    { "write",          (PyCFunction)Adapter_write, METH_VARARGS, 0},
-    { "file_wrapper",   (PyCFunction)Adapter_file_wrapper, METH_VARARGS, 0},
+    { "start_response", (PyCFunction)Adapter_start_response, METH_VARARGS, 0 },
+    { "write",          (PyCFunction)Adapter_write, METH_VARARGS, 0 },
+    { "file_wrapper",   (PyCFunction)Adapter_file_wrapper, METH_VARARGS, 0 },
     { NULL, NULL}
 };
 
@@ -3366,7 +3418,7 @@ static PyObject *Stream_close(StreamObject *self, PyObject *args)
 }
 
 static PyMethodDef Stream_methods[] = {
-    { "close",      (PyCFunction)Stream_close,      METH_VARARGS, 0},
+    { "close",      (PyCFunction)Stream_close,      METH_VARARGS, 0 },
     { NULL, NULL}
 };
 
@@ -3538,7 +3590,7 @@ static PyObject *wsgi_signal_intercept(PyObject *self, PyObject *args)
         }
     }
 
-    Py_INCREF(m);
+    Py_XDECREF(m);
 
     Py_INCREF(h);
 
@@ -3698,6 +3750,71 @@ static InterpreterObject *newInterpreterObject(const char *name,
     }
 
     /*
+     * If running in daemon process, override as appropriate
+     * the USER, USERNAME or LOGNAME environment  variables
+     * so that they match the user that the process is running
+     * as. Need to do this else we inherit the value from the
+     * Apache parent process which is likely wrong as will be
+     * root or the user than ran sudo when Apache started.
+     * Can't update these for normal Apache child processes
+     * as that would change the expected environment of other
+     * Apache modules.
+     */
+
+#ifndef WIN32
+    if (wsgi_daemon_pool) {
+        module = PyImport_ImportModule("os");
+
+        if (module) {
+            PyObject *dict = NULL;
+            PyObject *key = NULL;
+            PyObject *value = NULL;
+
+            dict = PyModule_GetDict(module);
+            object = PyDict_GetItemString(dict, "environ");
+
+            if (object) {
+                struct passwd *pwent;
+
+                pwent = getpwuid(geteuid());
+
+                if (getenv("USER")) {
+                    key = PyString_FromString("USER");
+                    value = PyString_FromString(pwent->pw_name);
+
+                    PyObject_SetItem(object, key, value);
+
+                    Py_DECREF(key);
+                    Py_DECREF(value);
+                }
+
+                if (getenv("USERNAME")) {
+                    key = PyString_FromString("USERNAME");
+                    value = PyString_FromString(pwent->pw_name);
+
+                    PyObject_SetItem(object, key, value);
+
+                    Py_DECREF(key);
+                    Py_DECREF(value);
+                }
+
+                if (getenv("LOGNAME")) {
+                    key = PyString_FromString("LOGNAME");
+                    value = PyString_FromString(pwent->pw_name);
+
+                    PyObject_SetItem(object, key, value);
+
+                    Py_DECREF(key);
+                    Py_DECREF(value);
+                }
+            }
+
+            Py_DECREF(module);
+        }
+    }
+#endif
+
+    /*
      * If running in daemon process, override HOME environment
      * variable so that is matches the home directory of the
      * user that the process is running as. Need to do this as
@@ -3779,17 +3896,39 @@ static InterpreterObject *newInterpreterObject(const char *name,
      * added using site.addsitedir() so that any Python .pth
      * files are opened and additional directories so defined
      * are added to default Python search path as well. This
-     * allows virtual Python environments to work.
+     * allows virtual Python environments to work. Note that
+     * site.addsitedir() adds new directories at the end of
+     * sys.path when they really need to be added in order at
+     * the start. We therefore need to do a fiddle and shift
+     * any newly added directories to the start of sys.path.
      */
 
     if (!wsgi_daemon_pool)
         wsgi_python_path = wsgi_server_config->python_path;
 
     if (wsgi_python_path) {
-        module = PyImport_ImportModule("site");
+        PyObject *path = NULL;
 
-        if (module) {
+        module = PyImport_ImportModule("site");
+        path = PySys_GetObject("path");
+
+        if (module && path) {
             PyObject *dict = NULL;
+
+            PyObject *old = NULL;
+            PyObject *new = NULL;
+            PyObject *tmp = NULL;
+
+            PyObject *item = NULL;
+
+            int i = 0;
+
+            old = PyList_New(0);
+            new = PyList_New(0);
+            tmp = PyList_New(0);
+
+            for (i=0; i<PyList_Size(path); i++)
+                PyList_Append(old, PyList_GetItem(path, i));
 
             dict = PyModule_GetDict(module);
             object = PyDict_GetItemString(dict, "addsitedir");
@@ -3903,14 +4042,43 @@ static InterpreterObject *newInterpreterObject(const char *name,
                 Py_END_ALLOW_THREADS
             }
 
+            for (i=0; i<PyList_Size(path); i++)
+                PyList_Append(tmp, PyList_GetItem(path, i));
+
+            for (i=0; i<PyList_Size(tmp); i++) {
+                item = PyList_GetItem(tmp, i);
+                if (!PySequence_Contains(old, item)) {
+                    int index = PySequence_Index(path, item);
+                    PyList_Append(new, item);
+                    if (index != -1)
+                        PySequence_DelItem(path, index); 
+                }
+            }
+
+            PyList_SetSlice(path, 0, 0, new);
+
+            Py_DECREF(old);
+            Py_DECREF(new);
+            Py_DECREF(tmp);
+
             Py_DECREF(module);
         }
         else {
-            Py_BEGIN_ALLOW_THREADS
-            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
-                         "mod_wsgi (pid=%d): Unable to import 'site' "
-                         "module.", getpid());
-            Py_END_ALLOW_THREADS
+            if (!module) {
+                Py_BEGIN_ALLOW_THREADS
+                ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                             "mod_wsgi (pid=%d): Unable to import 'site' "
+                             "module.", getpid());
+                Py_END_ALLOW_THREADS
+            }
+
+            if (!path) {
+                Py_BEGIN_ALLOW_THREADS
+                ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                             "mod_wsgi (pid=%d): Lookup for 'sys.path' "
+                             "failed.", getpid());
+                Py_END_ALLOW_THREADS
+            }
         }
     }
 
@@ -3961,6 +4129,16 @@ static InterpreterObject *newInterpreterObject(const char *name,
     PyModule_AddObject(module, "version", Py_BuildValue("(ii)",
                        MOD_WSGI_MAJORVERSION_NUMBER,
                        MOD_WSGI_MINORVERSION_NUMBER));
+
+    /*
+     * Add information about process group and application
+     * group to the Python 'mod_wsgi' module.
+     */
+
+    PyModule_AddObject(module, "process_group",
+                       PyString_FromString(wsgi_daemon_group));
+    PyModule_AddObject(module, "application_group",
+                       PyString_FromString(name));
 
     Py_DECREF(module);
 
@@ -4204,7 +4382,7 @@ static void Interpreter_dealloc(InterpreterObject *self)
 
                 Py_XDECREF(result);
 
-                Py_DECREF(m);
+                Py_XDECREF(m);
             }
 
             Py_XDECREF(res);
@@ -4313,7 +4491,7 @@ static void Interpreter_dealloc(InterpreterObject *self)
 
             Py_XDECREF(result);
 
-            Py_DECREF(m);
+            Py_XDECREF(m);
         }
 
         Py_XDECREF(res);
@@ -4420,7 +4598,7 @@ static void wsgi_python_version(void)
     }
 }
 
-static apr_status_t wsgi_python_term(void *data)
+static apr_status_t wsgi_python_term()
 {
     PyInterpreterState *interp = NULL;
     PyThreadState *tstate = NULL;
@@ -4447,6 +4625,30 @@ static apr_status_t wsgi_python_term(void *data)
 
     return APR_SUCCESS;
 }
+
+#if AP_SERVER_MAJORVERSION_NUMBER < 2
+static void wsgi_python_parent_cleanup(void *data)
+#else
+static apr_status_t wsgi_python_parent_cleanup(void *data)
+#endif
+{
+    if (wsgi_parent_pid == getpid()) {
+        /*
+	 * Destroy Python itself including the main
+	 * interpreter. If mod_python is being loaded it
+	 * is left to mod_python to destroy Python,
+	 * although it currently doesn't do so.
+         */
+
+        if (wsgi_python_initialized)
+            wsgi_python_term();
+    }
+
+#if AP_SERVER_MAJORVERSION_NUMBER >= 2
+    return APR_SUCCESS;
+#endif
+}
+
 
 static void wsgi_python_init(apr_pool_t *p)
 {
@@ -4483,7 +4685,7 @@ static void wsgi_python_init(apr_pool_t *p)
         /* Initialise Python. */
 
         ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
-                     "mod_wsgi: Initializing Python.");
+                     "mod_wsgi (pid=%d): Initializing Python.", getpid());
 
         initialized = 1;
 
@@ -4513,6 +4715,19 @@ static void wsgi_python_init(apr_pool_t *p)
         PyEval_ReleaseLock();
 
         wsgi_python_initialized = 1;
+
+    /*
+     * Register cleanups to be performed on parent restart
+     * or shutdown. This will destroy Python itself.
+     */
+
+#if AP_SERVER_MAJORVERSION_NUMBER < 2
+        ap_register_cleanup(p, NULL, wsgi_python_parent_cleanup,
+                            ap_null_cleanup);
+#else
+        apr_pool_cleanup_register(p, NULL, wsgi_python_parent_cleanup,
+                                  apr_pool_cleanup_null);
+#endif
     }
 }
 
@@ -4753,7 +4968,7 @@ static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
             }
 #else
             apr_finfo_t finfo;
-            if (apr_stat(&finfo, filename, APR_FINFO_SIZE,
+            if (apr_stat(&finfo, filename, APR_FINFO_NORM,
                          pool) != APR_SUCCESS) {
                 object = PyLong_FromLongLong(0);
             }
@@ -4819,7 +5034,7 @@ static int wsgi_reload_required(apr_pool_t *pool, request_rec *r,
             }
 #else
             apr_finfo_t finfo;
-            if (apr_stat(&finfo, filename, APR_FINFO_SIZE,
+            if (apr_stat(&finfo, filename, APR_FINFO_NORM,
                          pool) != APR_SUCCESS) {
                 return 1;
             }
@@ -5164,7 +5379,7 @@ static int wsgi_execute_script(request_rec *r)
 }
 
 /*
- * Apache child process initialision and cleanup. Initialise
+ * Apache child process initialisation and cleanup. Initialise
  * global table containing Python interpreter instances and
  * cache reference to main interpreter. Also register cleanup
  * function to delete interpreter on process shutdown.
@@ -5224,11 +5439,11 @@ static apr_status_t wsgi_python_child_cleanup(void *data)
     /*
      * Destroy Python itself including the main interpreter.
      * If mod_python is being loaded it is left to mod_python to
-     * destroy mod_python, although it currently doesn't do so.
+     * destroy Python, although it currently doesn't do so.
      */
 
     if (wsgi_python_initialized)
-        wsgi_python_term(0);
+        wsgi_python_term();
 
 #if AP_SERVER_MAJORVERSION_NUMBER >= 2
     return APR_SUCCESS;
@@ -5412,6 +5627,9 @@ static void wsgi_python_child_init(apr_pool_t *p)
                                               entry->handler_script,
                                               entry->process_group,
                                               entry->application_group);
+
+                    if (PyErr_Occurred()) 
+                        PyErr_Clear(); 
                 }
 
                 /* Safe now to release the module lock. */
@@ -5655,7 +5873,7 @@ static const char *wsgi_set_restrict_process(cmd_parms *cmd, void *mconfig,
     while (*args) {
         char const *option;
 
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (!strcmp(option, "%{GLOBAL}"))
             option = "";
@@ -5744,7 +5962,7 @@ static const char *wsgi_add_import_script(cmd_parms *cmd, void *mconfig,
 
     object = (WSGIScriptFile *)apr_array_push(sconfig->import_list);
 
-    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->handler_script = ap_getword_conf(cmd->pool, &args);
     object->process_group = NULL;
     object->application_group = NULL;
 
@@ -5752,7 +5970,7 @@ static const char *wsgi_add_import_script(cmd_parms *cmd, void *mconfig,
         return "Location of import script not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "application-group=") == option) {
             value = option + 18;
@@ -5803,13 +6021,13 @@ static const char *wsgi_set_dispatch_script(cmd_parms *cmd, void *mconfig,
 
     object = newWSGIScriptFile(cmd->pool);
 
-    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->handler_script = ap_getword_conf(cmd->pool, &args);
 
     if (!object->handler_script || !*object->handler_script)
         return "Location of dispatch script not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "application-group=") == option) {
             value = option + 18;
@@ -5972,13 +6190,13 @@ static const char *wsgi_set_access_script(cmd_parms *cmd, void *mconfig,
 
     object = newWSGIScriptFile(cmd->pool);
 
-    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->handler_script = ap_getword_conf(cmd->pool, &args);
 
     if (!object->handler_script || !*object->handler_script)
         return "Location of access script not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "application-group=") == option) {
             value = option + 18;
@@ -6008,13 +6226,13 @@ static const char *wsgi_set_auth_user_script(cmd_parms *cmd, void *mconfig,
 
     object = newWSGIScriptFile(cmd->pool);
 
-    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->handler_script = ap_getword_conf(cmd->pool, &args);
 
     if (!object->handler_script || !*object->handler_script)
         return "Location of auth user script not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "application-group=") == option) {
             value = option + 18;
@@ -6044,13 +6262,13 @@ static const char *wsgi_set_auth_group_script(cmd_parms *cmd, void *mconfig,
 
     object = newWSGIScriptFile(cmd->pool);
 
-    object->handler_script = ap_getword_conf(cmd->temp_pool, &args);
+    object->handler_script = ap_getword_conf(cmd->pool, &args);
 
     if (!object->handler_script || !*object->handler_script)
         return "Location of auth group script not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "application-group=") == option) {
             value = option + 18;
@@ -6226,9 +6444,8 @@ static void wsgi_log_script_error(request_rec *r, const char *e, const char *n)
         n = r->filename;
 
     message = apr_psprintf(r->pool, "%s: %s", e, n);
-    apr_table_set(r->notes, "error-notes", message);
 
-    ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r, message);
+    ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r, "%s", message);
 }
 
 static void wsgi_build_environment(request_rec *r)
@@ -7308,13 +7525,13 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
 
     /* Now parse options for directive. */
 
-    name = ap_getword_conf(cmd->temp_pool, &args);
+    name = ap_getword_conf(cmd->pool, &args);
 
     if (!name || !*name)
         return "Name of WSGI daemon process not supplied.";
 
     while (*args) {
-        option = ap_getword_conf(cmd->temp_pool, &args);
+        option = ap_getword_conf(cmd->pool, &args);
 
         if (strstr(option, "user=") == option) {
             value = option + 5;
@@ -7617,20 +7834,17 @@ static const char *wsgi_set_accept_mutex(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
+static apr_file_t *wsgi_signal_pipe_in = NULL;
+static apr_file_t *wsgi_signal_pipe_out = NULL;
+
 static void wsgi_signal_handler(int signum)
 {
+    apr_size_t nbytes = 1;
+
+    apr_file_write(wsgi_signal_pipe_out, "X", &nbytes);
+    apr_file_flush(wsgi_signal_pipe_out);
+
     wsgi_daemon_shutdown++;
-}
-
-static int wsgi_check_signal(int signum)
-{
-    if (signum == SIGINT || signum == SIGTERM) {
-        wsgi_daemon_shutdown++;
-
-        return 1;
-    }
-
-    return 0;
 }
 
 static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon);
@@ -8380,18 +8594,30 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
     apr_status_t rv;
     apr_status_t thread_rv;
 
-    /* Block all signals from being received. */
+    apr_pollfd_t poll_fd;
+    apr_int32_t poll_count = 0;
 
-    rv = apr_setup_signal_thread();
+    /*
+     * Create pipe by which signal handler can notify the main
+     * thread that signal has arrived indicating that process
+     * needs to shutdown.
+     */
+
+    rv = apr_file_pipe_create(&wsgi_signal_pipe_in, &wsgi_signal_pipe_out, p);
+
     if (rv != APR_SUCCESS) {
         ap_log_error(APLOG_MARK, WSGI_LOG_EMERG(rv), wsgi_server,
                      "mod_wsgi (pid=%d): Couldn't initialise signal "
-                     "thread in daemon process '%s'.", getpid(),
+                     "pipe in daemon process '%s'.", getpid(),
                      daemon->group->name);
         sleep(20);
 
         return;
     }
+
+    poll_fd.desc_type = APR_POLL_FILE;
+    poll_fd.reqevents = APR_POLLIN;
+    poll_fd.desc.f = wsgi_signal_pipe_in;
 
     /* Initialise maximum request count for daemon. */
 
@@ -8480,7 +8706,9 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
     /* Block until we get a process shutdown signal. */
 
-    apr_signal_thread(wsgi_check_signal);
+    do {
+        rv = apr_poll(&poll_fd, 1, &poll_count, -1);
+    } while (APR_STATUS_IS_EINTR(rv));
 
     ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
                  "mod_wsgi (pid=%d): Shutdown requested '%s'.",
@@ -8665,6 +8893,14 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
         ap_close_listeners();
 
         /*
+         * Cleanup the Apache scoreboard to ensure that any
+         * shared memory segments or memory mapped files not
+         * available to code in daemon processes.
+         */
+
+        ap_cleanup_scoreboard(0);
+
+        /*
          * Wipe out random value used in magic token so that not
          * possible for user code running in daemon process to
          * discover this value for other daemon process groups.
@@ -8704,10 +8940,8 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
         wsgi_daemon_shutdown = 0;
 
-        if (daemon->group->threads == 1) {
-            apr_signal(SIGINT, wsgi_signal_handler);
-            apr_signal(SIGTERM, wsgi_signal_handler);
-        }
+        apr_signal(SIGINT, wsgi_signal_handler);
+        apr_signal(SIGTERM, wsgi_signal_handler);
 
         /*
          * Flag whether multiple daemon processes or denoted
@@ -8852,6 +9086,37 @@ static int wsgi_start_daemons(apr_pool_t *p)
         int status;
 
         entry = &entries[i];
+
+        /*
+         * Check for whether the daemon process user and
+         * group are the default Apache values. If they are
+         * then reset them to the current values configured for
+         * Apache. This is to work around where the User/Group
+         * directives had not been set before the WSGIDaemonProcess
+         * directive was used in configuration file. In this case,
+         * where no 'user' and 'group' options were provided,
+         * the default values would have been used, but these
+         * were later overridden thus why we need to update it.
+         */
+
+        if (entry->uid == ap_uname2id(DEFAULT_USER)) {
+            entry->uid = unixd_config.user_id;
+            entry->user = unixd_config.user_name;
+
+            ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
+                         "mod_wsgi (pid=%d): Reset default user for "
+                         "daemon process group '%s' to uid=%ld.",
+                         getpid(), entry->name, (long)entry->uid);
+        }
+
+        if (entry->gid == ap_gname2id(DEFAULT_GROUP)) {
+            entry->gid = unixd_config.group_id;
+
+            ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
+                         "mod_wsgi (pid=%d): Reset default group for "
+                         "daemon process group '%s' to gid=%ld.",
+                         getpid(), entry->name, (long)entry->gid);
+        }
 
         /*
          * Calculate path for socket to accept requests on and
@@ -9380,6 +9645,14 @@ static int wsgi_execute_remote(request_rec *r)
         }
     }
 
+    /*
+     * Need to reset request status value to HTTP_OK else it
+     * screws up HTTP input filter when processing a POST
+     * request with 100-continue requirement.
+     */
+
+    r->status = HTTP_OK;
+
     /* Transfer any request content which was provided. */
 
     seen_eos = 0;
@@ -9805,7 +10078,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
 
     r->filename = (char *)apr_table_get(r->subprocess_env, "SCRIPT_FILENAME");
 
-    if ((rv = apr_stat(&r->finfo, r->filename, APR_FINFO_SIZE,
+    if ((rv = apr_stat(&r->finfo, r->filename, APR_FINFO_NORM,
                        r->pool)) != APR_SUCCESS) {
         /*
          * Don't fail at this point. Allow the lack of file to
@@ -10036,6 +10309,7 @@ static int wsgi_hook_init(apr_pool_t *pconf, apr_pool_t *ptemp,
 
 static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
 {
+#if defined(MOD_WSGI_WITH_DAEMONS)
     WSGIProcessGroup *entries = NULL;
     WSGIProcessGroup *entry = NULL;
 
@@ -10053,6 +10327,7 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
             entry->listener_fd = -1;
         }
     }
+#endif
 
     /* Setup Python in Apache worker processes. */
 

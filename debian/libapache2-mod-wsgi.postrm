@@ -1,4 +1,5 @@
 #! /bin/sh
+set -e
 
 if [ "$1" = "purge" -o "$1" = "remove" ]; then
     # remove pseudo conffile
