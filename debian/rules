@@ -6,9 +6,6 @@ PACKAGE=libapache2-mod-wsgi
 #export DH_VERBOSE=1
 
 
-# we need dpatch
-include /usr/share/dpatch/dpatch.make
-
 APXS2=/usr/bin/apxs2
 PYVERS=$(shell pyversions -vs)
 PYDEFAULT=$(shell pyversions -dv)
@@ -27,9 +24,9 @@ build-%/build-stamp: build-%/config.status
 	$(MAKE) -C build-$*
 	touch $@
 
-build: patch $(PYVERS:%=build-%/build-stamp)
+build: $(PYVERS:%=build-%/build-stamp)
 
-clean: unpatch
+clean:
 	dh_testdir
 	dh_testroot
 	rm -rf build-*
@@ -79,4 +76,3 @@ binary-arch: build install
 
 binary: binary-indep binary-arch
 .PHONY: build clean binary-indep binary-arch binary install
-.PHONY: clean-patched patch unpatch

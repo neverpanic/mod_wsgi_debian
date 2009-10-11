@@ -1,3 +1,11 @@
+mod-wsgi (2.6-1) unstable; urgency=low
+
+  * New upstream release
+  * configure-apache-version.dpatch removed, no longer needed
+  * Bump Standards-Version to 3.8.3 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 11 Oct 2009 21:27:30 +0200
+
 mod-wsgi (2.5-1~lenny1) stable; urgency=medium
 
   * Rebuild for Lenny (Closes: #526154)
