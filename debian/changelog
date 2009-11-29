@@ -1,3 +1,9 @@
+mod-wsgi (2.8-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 29 Nov 2009 14:07:48 +0100
+
 mod-wsgi (2.6-1) unstable; urgency=low
 
   * New upstream release
