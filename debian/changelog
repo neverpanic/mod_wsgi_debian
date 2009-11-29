@@ -1,3 +1,12 @@
+mod-wsgi (2.8-1) unstable; urgency=low
+
+  * New upstream release
+  * Remove postrm maintainer script, no longer needed as Lenny doesn't have
+    mod-wsgi.{conf,load} anymore and this script was removing new files (which
+    is handled by dpkg, closes: 558589)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 29 Nov 2009 14:07:48 +0100
+
 mod-wsgi (2.6-1) unstable; urgency=low
 
   * New upstream release
