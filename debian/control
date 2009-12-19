@@ -1,5 +1,5 @@
 Source: mod-wsgi
-Section: python
+Section: httpd
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
 Uploaders: Bernd Zeimetz <bzed@debian.org>, Piotr Ożarowski <piotr@debian.org>
