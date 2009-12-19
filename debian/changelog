@@ -1,3 +1,10 @@
+mod-wsgi (3.1-1) unstable; urgency=low
+
+  * New upstream release.
+  * Update wsgi.conf example. 
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 19 Dec 2009 12:59:50 +0100
+
 mod-wsgi (2.8-1) unstable; urgency=low
 
   * New upstream release
