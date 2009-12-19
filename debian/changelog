@@ -1,11 +1,9 @@
-mod-wsgi (2.8-2) unstable; urgency=low
+mod-wsgi (3.1-1) experimental; urgency=low
 
-  * Restart Apache instead of reloading config file in postinst (temporary
-    workaround for bug #558608)
-  * Section changed to "httpd"
-  * Bump Standards-Version to 3.8.4 (no changes needed)
+  * New upstream release.
+  * Update wsgi.conf example. 
 
- -- Piotr Ożarowski <piotr@debian.org>  Mon, 01 Feb 2010 21:03:25 +0100
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 19 Dec 2009 12:59:50 +0100
 
 mod-wsgi (2.8-1) unstable; urgency=low
 

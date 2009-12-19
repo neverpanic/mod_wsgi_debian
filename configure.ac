@@ -21,7 +21,7 @@ AC_INIT(mod_wsgi.c)
 AC_ARG_ENABLE(framework, AC_HELP_STRING([--disable-framework],
             [disable mod_wsgi framework link]),
             [ENABLE_FRAMEWORK=$enableval],
-            [ENABLE_FRAMEWORK=yes])
+	    [ENABLE_FRAMEWORK=yes])
 
 AC_ARG_ENABLE(embedded, AC_HELP_STRING([--disable-embedded],
             [disable mod_wsgi embedded mode]),
@@ -151,8 +151,8 @@ if test -x /usr/bin/lipo; then
     LDFLAGS3=""
     ARCHITECTURES=`/usr/bin/lipo -info $HTTPD | sed -e 's/.*://'`
     for ARCH in $ARCHITECTURES; do
-        CFLAGS2="${CFLAGS2} -Wc,'-arch ${ARCH}'"
-        LDFLAGS3="${LDFLAGS3} -arch ${ARCH}"
+        CFLAGS2="${CFLAGS2} -Wc,'-arch ${ARCH}'" 
+        LDFLAGS3="${LDFLAGS3} -arch ${ARCH}" 
     done
 fi
 
@@ -170,6 +170,6 @@ AC_SUBST(LIBEXECDIR)
 HTTPD_MAJOR_VERSION=`echo ${HTTPD_VERSION} | sed -e 's/\..*//'`
 
 rm -f Makefile.in
-ln -s Makefile-${HTTPD_MAJOR_VERSION}.X.in Makefile.in
+ln -s posix-ap${HTTPD_MAJOR_VERSION}X.mk.in Makefile.in
 
 AC_OUTPUT(Makefile)

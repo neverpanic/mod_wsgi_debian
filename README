@@ -10,11 +10,9 @@ adapter is written completely in C code against the Apache C runtime and
 for hosting WSGI applications within Apache has a lower overhead than using
 existing WSGI adapters for mod_python or CGI.
 
-The package can be compiled for and used with either Apache 1.3, 2.0 or
-2.2. On UNIX systems, either the single threaded 'prefork' or multithreaded
-'worker' Apache MPMs can be used. Development and testing of mod_wsgi has
-been carried out with Python 2.3.5, but is expected to be able to work with
-any version of Python 2.3, or later versions of Python.
+The package can be compiled for and used with either Apache 1.3, 2.0 or 2.2.
+On UNIX systems, either the single threaded 'prefork' or multithreaded
+'worker' Apache MPMs can be used.
 
 Note that 'daemon' mode of mod_wsgi is only available if Apache 2.0 or 2.2
 is being used on a UNIX platform and where the Apache run time library
@@ -140,8 +138,8 @@ loading of Apache modules.
 If you have multiple versions of Python installed and you are not using
 that which is the default, you may have to organise that the PATH inherited
 by the Apache application when run will result in Apache finding the
-alternate version. Alternatively, the WSGIPythonExecutable directive should
-be used to specify the exact location of the 'python' executable
+alternate version. Alternatively, the WSGIPythonHome directive should
+be used to specify the exact location of the Python installation
 corresponding to the version of Python compiled against. If this is not
 done, the version of Python running within Apache may attempt to use the
 Python modules from the wrong version of Python.
@@ -218,6 +216,9 @@ With Apache 1.3, it would also be necessary to add a line of the form:
 
     AddModule mod_wsgi.c
 
+For Apache 1.3, the LoadModule and AddModule lines related to mod_wsgi
+must appear prior to those for the Apache code module called mod_alias. 
+
 If you wish to use mod_python at the same time as mod_wsgi, then mod_python
 must be compiled against the same version of Python. In addition to the
 same version of Python being used, you should use a version of Python which
@@ -246,6 +247,23 @@ instead.
 
     apachectl stop
     apachectl start
+
+Note that on some Linux systems using 'apachectl' may not work properly.
+On these systems, if you have problems using 'apachectl' ensure instead
+you use the init.d script for Apache instead.
+
+    /etc/init.d/httpd stop
+    /etc/init.d/httpd start
+
+The init.d script may be called 'apache2'. Similarly, the 'apachectl'
+script may even be called 'apachectl2' on some systems where they allow
+both Apache 1.3 and Apache 2.X to be installed at the same time.
+
+In general, for any system where you are using a prepackaged version of
+Apache, it is wise to always check the documentation for that package or
+system to determine the correct way to stop/start the Apache service. This
+is because they often use a wrapper around 'apachectl', or replace it, with
+a script which performs additional actions.
 
 If all is okay, you should see a line of the form:
 
