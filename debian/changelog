@@ -1,8 +1,33 @@
-mod-wsgi (2.5-1~bpo50+1) lenny-backports; urgency=low
+mod-wsgi (2.8-1~bpo50+1) lenny-backports; urgency=low
 
   * Rebuild for lenny-backports.
 
- -- Piotr Ożarowski <piotr@debian.org>  Sat, 30 May 2009 19:55:15 +0200
+ -- Piotr Ożarowski <piotr@debian.org>  Sat, 16 Jan 2010 16:41:00 +0100
+
+mod-wsgi (2.8-1) unstable; urgency=low
+
+  * New upstream release
+  * Remove postrm maintainer script, no longer needed as Lenny doesn't have
+    mod-wsgi.{conf,load} anymore and this script was removing new files (which
+    is handled by dpkg, closes: 558589)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 29 Nov 2009 14:07:48 +0100
+
+mod-wsgi (2.6-1) unstable; urgency=low
+
+  * New upstream release
+  * configure-apache-version.dpatch removed, no longer needed
+  * Bump Standards-Version to 3.8.3 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 11 Oct 2009 21:27:30 +0200
+
+mod-wsgi (2.5-1~lenny1) stable; urgency=medium
+
+  * Rebuild for Lenny (Closes: #526154)
+  * Add patch from upstream's mod_wsgi-2.X branch (revision 1352)
+    (decrement of reference count on NULL pointer)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Fri, 28 Aug 2009 23:17:18 +0200
 
 mod-wsgi (2.5-1) unstable; urgency=low
 

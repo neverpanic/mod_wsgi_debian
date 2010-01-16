@@ -18,6 +18,11 @@ dnl Process this file with autoconf to produce a configure script.
 
 AC_INIT(mod_wsgi.c)
 
+AC_ARG_ENABLE(framework, AC_HELP_STRING([--disable-framework],
+            [disable mod_wsgi framework link]),
+            [ENABLE_FRAMEWORK=$enableval],
+            [ENABLE_FRAMEWORK=yes])
+
 AC_ARG_ENABLE(embedded, AC_HELP_STRING([--disable-embedded],
             [disable mod_wsgi embedded mode]),
             [ENABLE_EMBEDDED=$enableval],
@@ -36,7 +41,25 @@ AC_SUBST(APXS)
 
 AC_MSG_CHECKING(Apache version)
 HTTPD="`${APXS} -q SBINDIR`/`${APXS} -q TARGET`"
-HTTPD_VERSION=`$HTTPD -v | awk '/version/ {print $3}' | awk -F/ '{print $2}'`
+HTTPD_INCLUDEDIR="`${APXS} -q INCLUDEDIR`"
+if test -x ${HTTPD}; then
+    HTTPD_VERSION=`${HTTPD} -v | awk '/version/ {print $3}' \
+     | awk -F/ '{print $2}'`
+else
+    if test -f ${HTTPD_INCLUDEDIR}/ap_release.h; then
+        HTTPD_VERSION=`grep '^#define AP_SERVER_MAJORVERSION_NUMBER ' \
+         ${HTTPD_INCLUDEDIR}/ap_release.h | sed -e \
+         's/^#define AP_SERVER_MAJORVERSION_NUMBER \([0-9]\).*/\1.X/'`
+    else
+        if test -f ${HTTPD_INCLUDEDIR}/httpd.h; then
+            HTTPD_VERSION=`grep '^#define APACHE_RELEASE ' \
+             ${HTTPD_INCLUDEDIR}/httpd.h | sed -e \
+             's/^#define APACHE_RELEASE \([0-9]\).*/\1.X/'`
+        else
+            HTTPD_VERSION="2.?"
+        fi
+    fi
+fi
 AC_MSG_RESULT($HTTPD_VERSION)
 
 AC_ARG_WITH(python, AC_HELP_STRING([--with-python=NAME],
@@ -90,7 +113,8 @@ PYTHONFRAMEWORK=`${PYTHON} -c 'from sys import stdout; \
     from distutils import sysconfig; \
     stdout.write(sysconfig.get_config_var("PYTHONFRAMEWORK"))'`
 
-if test "${PYTHONFRAMEWORKDIR}" = "no-framework"; then
+if test "${PYTHONFRAMEWORKDIR}" = "no-framework" -o \
+        "${ENABLE_FRAMEWORK}" != "yes"; then
     LDFLAGS1="-L${PYTHONLIBDIR}"
     LDFLAGS2="-L${PYTHONCFGDIR}"
 
@@ -102,49 +126,39 @@ if test "${PYTHONFRAMEWORKDIR}" = "no-framework"; then
         from distutils import sysconfig; \
         stdout.write(sysconfig.get_config_var("SYSLIBS"))'`
 else
-    if test -f "${PYTHONCFGDIR}/libpython${PYTHON_VERSION}.a"; then
-        LDFLAGS2="-L${PYTHONCFGDIR}"
+    LDFLAGS1="-Wl,-F${PYTHONFRAMEWORKPREFIX} -framework ${PYTHONFRAMEWORK}"
 
-        LDLIBS1="-lpython${PYTHON_VERSION}"
-        LDLIBS2=`${PYTHON} -c 'from sys import stdout; \
-            from distutils import sysconfig; \
-            stdout.write(sysconfig.get_config_var("LIBS"))'`
-        LDLIBS3=`${PYTHON} -c 'from sys import stdout; \
-            from distutils import sysconfig; \
-            stdout.write(sysconfig.get_config_var("SYSLIBS"))'`
-    else
-        LDFLAGS1="-F${PYTHONFRAMEWORKPREFIX} -framework ${PYTHONFRAMEWORK}"
+    VERSION="${PYTHON_VERSION}"
+    STRING="${PYTHONFRAMEWORKDIR}/Versions/${VERSION}/${PYTHONFRAMEWORK}"
+    LDFLAGS2=`${PYTHON} -c "from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var(
+        \"LINKFORSHARED\").replace(\"${STRING}\", ''))"`
 
-        VERSION="${PYTHON_VERSION}"
-        STRING="${PYTHONFRAMEWORKDIR}/Versions/${VERSION}/${PYTHONFRAMEWORK}"
-        LDFLAGS2=`${PYTHON} -c "from sys import stdout; \
-            from distutils import sysconfig; \
-            stdout.write(sysconfig.get_config_var(
-            \"LINKFORSHARED\").replace(\"${STRING}\", ''))"`
-
-        LDLIBS1=`${PYTHON} -c 'from sys import stdout; \
-            from distutils import sysconfig; \
-            stdout.write(sysconfig.get_config_var("LIBS"))'`
-    fi
+    LDLIBS1=`${PYTHON} -c 'from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var("LIBS"))'`
 fi
 
-CFLAGS=""
+CFLAGS1=""
+for arg in ${CFLAGS}
+do
+    CFLAGS1="${CFLAGS1} -Wc,$arg"
+done
+
+CFLAGS2=""
 if test -x /usr/bin/lipo; then
     LDFLAGS3=""
     ARCHITECTURES=`/usr/bin/lipo -info $HTTPD | sed -e 's/.*://'`
     for ARCH in $ARCHITECTURES; do
-        CFLAGS="${CFLAGS} -Wc,'-arch ${ARCH}'" 
-        LDFLAGS3="${LDFLAGS3} -arch ${ARCH}" 
+        CFLAGS2="${CFLAGS2} -Wc,'-arch ${ARCH}'"
+        LDFLAGS3="${LDFLAGS3} -arch ${ARCH}"
     done
 fi
 
+CFLAGS="${CFLAGS1} ${CFLAGS2}"
 LDFLAGS="${LDFLAGS} ${LDFLAGS1} ${LDFLAGS2} ${LDFLAGS3}"
 LDLIBS="${LDLIBS} ${LDLIBS1} ${LDLIBS2} ${LDLIBS3}"
-
-#LDFLAGS=`echo ${LDFLAGS} | \
-# sed -e "s/-Wl,\([[^ ]][[^ ]]*\)/\1/g" -e "s/\([[^ ]][[^ ]]*\)/-Wl,\1/g"`
-#LDLIBS=`echo ${LDLIBS} | \
-# sed -e "s/-Wl,\([[^ ]][[^ ]]*\)/\1/g" -e "s/\([[^ ]][[^ ]]*\)/-Wl,\1/g"`
 
 AC_SUBST(CFLAGS)
 AC_SUBST(LDFLAGS)
