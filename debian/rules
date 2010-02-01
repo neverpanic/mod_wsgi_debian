@@ -1,0 +1,78 @@
+#!/usr/bin/make -f
+
+PACKAGE=libapache2-mod-wsgi
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+
+APXS2=/usr/bin/apxs2
+PYVERS=$(shell pyversions -vs)
+PYDEFAULT=$(shell pyversions -dv)
+PYMIN=$(shell echo $(PYVERS) | awk '{print $$1}')
+PYMAX=$(shell echo $(PYVERS) | LANG=C awk '{print $$NF+0.1}')
+
+build-%/config.status:
+	dh_testdir
+	mkdir -p build-$*
+	cp *.in *.c configure build-$*/
+	cd build-$* && ./configure --with-apxs=$(APXS2) \
+	            --with-python=/usr/bin/python$*
+
+build-%/build-stamp: build-%/config.status
+	dh_testdir
+	$(MAKE) -C build-$*
+	touch $@
+
+build: $(PYVERS:%=build-%/build-stamp)
+
+clean:
+	dh_testdir
+	dh_testroot
+	rm -rf build-*
+	dh_clean 
+
+install-clean:
+	dh_testdir
+	dh_testroot
+	dh_clean -k
+	dh_installdirs
+
+install-%: build-%/build-stamp
+	$(MAKE) -C build-$* DESTDIR=$(CURDIR)/debian/$(PACKAGE) install
+	mv $(CURDIR)/debian/$(PACKAGE)/usr/lib/apache2/modules/mod_wsgi.so \
+		$(CURDIR)/debian/$(PACKAGE)/usr/lib/apache2/modules/mod_wsgi.so-$*
+
+install: build install-clean $(PYVERS:%=install-%)
+
+# Build architecture-independent files here.
+binary-indep: build install
+
+# Build architecture-dependent files here.
+binary-arch: build install
+	dh_testdir
+	dh_testroot
+	dh_installchangelogs 
+	dh_installdocs
+	dh_install
+	install -d -m 755 debian/$(PACKAGE)/usr/share/python/runtime.d
+	install -m 755 debian/*.rtupdate debian/$(PACKAGE)/usr/share/python/runtime.d/
+	dh_installman
+	dh_link usr/lib/apache2/modules/mod_wsgi.so-$(PYDEFAULT) usr/lib/apache2/modules/mod_wsgi.so
+	dh_strip
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	# Ugh, ignore libpython dependencies
+	( for i in $(PYVERS); do echo libpython$$i 1.0; done ) > debian/shlibs.local
+	dh_shlibdeps
+	rm -f debian/shlibs.local
+	# Generate dependencies manually as there are no public modules
+	echo 'python:Depends=python (>= $(PYMIN)), python (<< $(PYMAX))' \
+	     >> $(CURDIR)/debian/$(PACKAGE).substvars
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary: binary-indep binary-arch
+.PHONY: build clean binary-indep binary-arch binary install
