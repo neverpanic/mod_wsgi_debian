@@ -372,8 +372,8 @@ static apr_status_t wsgi_utf8_to_unicode_path(apr_wchar_t* retstr,
 /* Version and module information. */
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 3
-#define MOD_WSGI_MINORVERSION_NUMBER 1
-#define MOD_WSGI_VERSION_STRING "3.1"
+#define MOD_WSGI_MINORVERSION_NUMBER 2
+#define MOD_WSGI_VERSION_STRING "3.2"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -1314,6 +1314,7 @@ typedef struct {
     apr_thread_t *thread;
     int running;
     int next;
+    int wakeup;
     apr_thread_cond_t *condition;
     apr_thread_mutex_t *mutex;
 } WSGIDaemonThread;
@@ -4388,7 +4389,7 @@ static PyMethodDef wsgi_signal_method[] = {
 static const char *wsgi_python_path = NULL;
 static const char *wsgi_python_eggs = NULL;
 
-#if defined(APR_HAS_THREADS)
+#if APR_HAS_THREADS
 static int wsgi_thread_count = 0;
 static apr_threadkey_t *wsgi_thread_key;
 #endif
@@ -4398,7 +4399,7 @@ typedef struct {
     char *name;
     PyInterpreterState *interp;
     int owner;
-#if defined(APR_HAS_THREADS)
+#if APR_HAS_THREADS
     apr_hash_t *tstate_table;
 #else
     PyThreadState *tstate;
@@ -5090,7 +5091,7 @@ static InterpreterObject *newInterpreterObject(const char *name)
      */
 
     if (self->owner) {
-#if defined(APR_HAS_THREADS)
+#if APR_HAS_THREADS
         int thread_id = 0;
         int *thread_handle = NULL;
 
@@ -5145,7 +5146,7 @@ static void Interpreter_dealloc(InterpreterObject *self)
     PyEval_ReleaseLock();
 
     if (*self->name) {
-#if defined(APR_HAS_THREADS)
+#if APR_HAS_THREADS
         int thread_id = 0;
         int *thread_handle = NULL;
 
@@ -6555,7 +6556,7 @@ static int wsgi_execute_script(request_rec *r)
             ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
                           "mod_wsgi (pid=%d): Target WSGI script '%s' does "
                           "not contain WSGI application '%s'.",
-                          getpid(), r->filename, config->callable_object);
+                          getpid(), script, config->callable_object);
             Py_END_ALLOW_THREADS
 
             status = HTTP_NOT_FOUND;
@@ -9624,7 +9625,11 @@ static const char *wsgi_set_accept_mutex(cmd_parms *cmd, void *mconfig,
 
     sconfig = ap_get_module_config(cmd->server->module_config, &wsgi_module);
 
+#if !defined(AP_ACCEPT_MUTEX_TYPE)
     sconfig->lock_mechanism = ap_accept_lock_mech;
+#else
+    sconfig->lock_mechanism = APR_LOCK_DEFAULT;
+#endif
 
     if (!strcasecmp(arg, "default")) {
         sconfig->lock_mechanism = APR_LOCK_DEFAULT;
@@ -10099,7 +10104,29 @@ static apr_status_t wsgi_worker_acquire(int id)
             continue;
         }
         else {
-            return apr_thread_cond_wait(thread->condition, thread->mutex);
+            apr_status_t rv;
+
+            if (thread->wakeup) {
+                thread->wakeup = 0;
+
+                return APR_SUCCESS;
+            }
+
+            rv = apr_thread_cond_wait(thread->condition, thread->mutex);
+
+            while (rv == APR_SUCCESS && !thread->wakeup)
+                rv = apr_thread_cond_wait(thread->condition, thread->mutex);
+
+            if (rv != APR_SUCCESS) {
+                ap_log_error(APLOG_MARK, WSGI_LOG_CRIT(rv),
+                             wsgi_server, "mod_wsgi (pid=%d): "
+                             "Wait on thread %d wakeup condition variable "
+                             "failed.", getpid(), id);
+            }
+
+            thread->wakeup = 0;
+
+            return rv;
         }
     }
 }
@@ -10130,9 +10157,8 @@ static apr_status_t wsgi_worker_release()
             }
             else {
                 /*
-		 * Acquire and release the idle worker's mutex
-		 * to ensure that it's actually waiting on its
-		 * condition variable
+		 * Flag that thread should be woken up and then
+                 * signal it via the condition variable.
                  */
 
                 apr_status_t rv;
@@ -10140,6 +10166,9 @@ static apr_status_t wsgi_worker_release()
                     APR_SUCCESS) {
                     return rv;
                 }
+
+                thread->wakeup = 1;
+
                 if ((rv = apr_thread_mutex_unlock(thread->mutex)) !=
                     APR_SUCCESS) {
                     return rv;
@@ -10348,6 +10377,7 @@ static void wsgi_daemon_worker(apr_pool_t *p, WSGIDaemonThread *thread)
                                  wsgi_server, "mod_wsgi (pid=%d): "
                                  "Couldn't release accept mutex '%s'.",
                                  getpid(), group->socket);
+
                     apr_pool_destroy(ptrans);
                     thread->running = 0;
 
@@ -10398,6 +10428,8 @@ static void *wsgi_daemon_thread(apr_thread_t *thd, void *data)
 {
     WSGIDaemonThread *thread = data;
     apr_pool_t *p = apr_thread_pool_get(thd);
+
+    apr_thread_mutex_lock(thread->mutex);
 
     wsgi_daemon_worker(p, thread);
 
@@ -10678,8 +10710,6 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
             kill(getpid(), SIGTERM);
             sleep(5);
         }
-
-        apr_thread_mutex_lock(thread->mutex);
 
         /* Now create the actual thread. */
 
@@ -11061,30 +11091,42 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
             /*
              * Iterate over all servers and close any error
-             * logs different to that for virtual host.
+             * logs different to that for virtual host. Note that
+             * if errors are being redirected to syslog, then
+             * the server error log reference will actually be
+             * a null pointer, so need to ensure that check for
+             * that and don't attempt to close it in that case.
              */
 
             server = wsgi_server;
 
             while (server != NULL) {
-                if (server->error_log != daemon->group->server->error_log)
+                if (server->error_log &&
+                    server->error_log != daemon->group->server->error_log) {
                     apr_file_close(server->error_log);
+                }
 
                 server = server->next;
             }
 
             /*
-             * Reassociate stderr output with error log from the
-             * virtual host the daemon is associated with. Close
-             * the virtual host error log and point it at stderr
-             * log instead. Do the latter so don't get two
-             * references to same open file. Just in case
-             * anything still accesses error log of main server,
-             * map main server error log to that of the virtual
-             * host.
+            * Reassociate stderr output with error log from the
+            * virtual host the daemon is associated with. Close
+            * the virtual host error log and point it at stderr
+            * log instead. Do the latter so don't get two
+            * references to same open file. Just in case
+            * anything still accesses error log of main server,
+            * map main server error log to that of the virtual
+            * host. Note that cant do this if errors are being
+            * redirected to syslog, as indicated by virtual
+            * host error log being a null pointer. In that case
+            * just leave everything as it was. Also can't remap
+            * the error log for main server if it was being
+            * redirected to syslog but virtual host wasn't.
              */
 
-            if (daemon->group->server->error_log != wsgi_server->error_log) {
+            if (daemon->group->server->error_log  &&
+                daemon->group->server->error_log != wsgi_server->error_log) {
                 apr_file_open_stderr(&errfile, wsgi_server->process->pool);
                 apr_file_dup2(errfile, daemon->group->server->error_log,
                               wsgi_server->process->pool);
@@ -11092,7 +11134,8 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
                 apr_file_close(daemon->group->server->error_log);
                 daemon->group->server->error_log = errfile;
 
-                wsgi_server->error_log = daemon->group->server->error_log;
+                if (wsgi_server->error_log)
+                    wsgi_server->error_log = daemon->group->server->error_log;
             }
         }
 

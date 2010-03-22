@@ -8,6 +8,8 @@ PACKAGE=libapache2-mod-wsgi
 
 APXS2=/usr/bin/apxs2
 PYVERS=$(shell pyversions -vs)
+# add Python 3.X versions:
+PYVERS += $(shell dpkg-query -W -f='$${Depends}' python3-all-dev | grep -o 'python3.[0-9]-dev' | grep -o '3.[0-9]')
 PYDEFAULT=$(shell pyversions -dv)
 PYMIN=$(shell echo $(PYVERS) | awk '{print $$1}')
 PYMAX=$(shell echo $(PYVERS) | LANG=C awk '{print $$NF+0.1}')

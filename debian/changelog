@@ -1,3 +1,20 @@
+mod-wsgi (3.2-1) unstable; urgency=low
+
+  * New upstream release
+  * Build Python 3.X version of the module
+    - python3-all-dev added to build dependencies
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 22 Mar 2010 20:05:19 +0100
+
+mod-wsgi (2.8-2) unstable; urgency=low
+
+  * Restart Apache instead of reloading config file in postinst (temporary
+    workaround for bug #558608)
+  * Section changed to "httpd"
+  * Bump Standards-Version to 3.8.4 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 01 Feb 2010 21:03:25 +0100
+
 mod-wsgi (3.1-1) experimental; urgency=low
 
   * New upstream release.
