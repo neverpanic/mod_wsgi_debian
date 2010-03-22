@@ -1,6 +1,8 @@
 mod-wsgi (3.2-1) unstable; urgency=low
 
   * New upstream release
+  * Build Python 3.X version of the module
+    - python3-all-dev added to build dependencies
 
  -- Piotr Ożarowski <piotr@debian.org>  Mon, 22 Mar 2010 20:05:19 +0100
 
