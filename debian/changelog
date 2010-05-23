@@ -1,3 +1,9 @@
+mod-wsgi (3.2-3) UNRELEASED; urgency=low
+
+  * watch file fixed.
+
+ -- Sameer Rahmani <lxsameer@gmail.com>  Mon, 24 May 2010 01:23:24 +0430
+
 mod-wsgi (3.2-2) unstable; urgency=low
 
   * mod-wsgi needs to depend on libpython for Python > 2.5.
