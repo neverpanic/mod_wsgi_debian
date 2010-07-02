@@ -1,8 +1,15 @@
 mod-wsgi (3.2-3) UNRELEASED; urgency=low
 
+  [ Sameer Rahmani ]
   * watch file fixed.
 
- -- Sameer Rahmani <lxsameer@gmail.com>  Mon, 24 May 2010 01:23:24 +0430
+  [ Bernd Zeimetz ]
+  * Ensure that the mod-wsgi symlink is updated to the current default Python
+    version while installing the package. This is only necessary in rare cases
+    (when the default Python version was updated after the last rebuild of
+    mod-wsgi), but it needs to be handled properly.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Fri, 02 Jul 2010 12:50:57 +0200
 
 mod-wsgi (3.2-2) unstable; urgency=low
 

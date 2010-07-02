@@ -13,6 +13,11 @@ apache_force_reload() {
 }
 
 if [ -z "$2" ]; then
+    wsgi_py=`readlink /usr/lib/apache2/modules/mod_wsgi.so | sed 's,.*-,,'`
+    py_default=`dpkg -s python | grep '^Version' | sed 's,Version: \([^.]*.[^.]*\).*,\1,'`
+    if [ ! "${wsgi_py}" = "${py_default}" ]; then
+        ln -sf mod_wsgi.so-${py_default} /usr/lib/apache2/modules/mod_wsgi.so
+    fi
     if [ -e /etc/apache2/apache2.conf ]; then
         a2enmod wsgi >/dev/null || true
         apache_force_reload
