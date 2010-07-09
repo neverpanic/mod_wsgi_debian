@@ -9,6 +9,9 @@ mod-wsgi (3.2-3) UNRELEASED; urgency=low
     in rare cases (when the default Python version was updated after the last
     rebuild of mod-wsgi), but it needs to be handled properly.
 
+  [ Piotr Ożarowski ]
+  * Provide httpd-wsgi (see #588497)
+
  -- Bernd Zeimetz <bzed@debian.org>  Fri, 02 Jul 2010 13:54:04 +0200
 
 mod-wsgi (3.2-2) unstable; urgency=low

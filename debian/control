@@ -13,6 +13,7 @@ Package: libapache2-mod-wsgi
 Architecture: any
 Depends: apache2, apache2.2-common, ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}
 Suggests: apache2-mpm-worker | apache2-mpm-event
+Provides: httpd-wsgi
 Description: Python WSGI adapter module for Apache
  The mod_wsgi adapter is an Apache module that provides a WSGI (Web Server
  Gateway Interface, a standard interface between web server software and
