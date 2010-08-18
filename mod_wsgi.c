@@ -1,7 +1,7 @@
 /* vim: set sw=4 expandtab : */
 
 /*
- * Copyright 2007-2009 GRAHAM DUMPLETON
+ * Copyright 2007-2010 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -372,8 +372,8 @@ static apr_status_t wsgi_utf8_to_unicode_path(apr_wchar_t* retstr,
 /* Version and module information. */
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 3
-#define MOD_WSGI_MINORVERSION_NUMBER 2
-#define MOD_WSGI_VERSION_STRING "3.2"
+#define MOD_WSGI_MINORVERSION_NUMBER 3
+#define MOD_WSGI_VERSION_STRING "3.3"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -1601,6 +1601,17 @@ static PyObject *Log_close(LogObject *self, PyObject *args)
     return Py_None;
 }
 
+static PyObject *Log_isatty(LogObject *self, PyObject *args)
+{
+    PyObject *result = NULL;
+
+    if (!PyArg_ParseTuple(args, ":isatty"))
+        return NULL;
+
+    Py_INCREF(Py_False);
+    return Py_False;
+}
+
 static void Log_queue(LogObject *self, const char *msg, int len)
 {
     const char *p = NULL;
@@ -1844,6 +1855,7 @@ static PyObject *Log_get_errors(LogObject *self, void *closure)
 static PyMethodDef Log_methods[] = {
     { "flush",      (PyCFunction)Log_flush,      METH_VARARGS, 0 },
     { "close",      (PyCFunction)Log_close,      METH_VARARGS, 0 },
+    { "isatty",     (PyCFunction)Log_isatty,     METH_VARARGS, 0 },
     { "write",      (PyCFunction)Log_write,      METH_VARARGS, 0 },
     { "writelines", (PyCFunction)Log_writelines, METH_VARARGS, 0 },
 #if PY_MAJOR_VERSION >= 3
@@ -3031,22 +3043,22 @@ static int Adapter_output(AdapterObject *self, const char *data, int length,
 
     if (self->headers) {
         /*
-	 * Apache prior to Apache 2.2.8 has a bug in it
-	 * whereby it doesn't force '100 Continue'
-	 * response before responding with headers if no
-	 * read. So, force a zero length read before
-	 * sending the headers if haven't yet attempted
-	 * to read anything. This will ensure that if no
-	 * request content has been read that any '100
-	 * Continue' response will be flushed and sent
-	 * back to the client if client was expecting
-	 * one. Only want to do this for 2xx and 3xx
-	 * status values. Note that even though Apple
-	 * supplied version of Apache on MacOS X Leopard
-	 * is newer than version 2.2.8, the header file
-	 * has never been patched when they make updates
-	 * and so anything compiled against it thinks it
-	 * is older.
+         * Apache prior to Apache 2.2.8 has a bug in it
+         * whereby it doesn't force '100 Continue'
+         * response before responding with headers if no
+         * read. So, force a zero length read before
+         * sending the headers if haven't yet attempted
+         * to read anything. This will ensure that if no
+         * request content has been read that any '100
+         * Continue' response will be flushed and sent
+         * back to the client if client was expecting
+         * one. Only want to do this for 2xx and 3xx
+         * status values. Note that even though Apple
+         * supplied version of Apache on MacOS X Leopard
+         * is newer than version 2.2.8, the header file
+         * has never been patched when they make updates
+         * and so anything compiled against it thinks it
+         * is older.
          */
 
 #if (AP_SERVER_MAJORVERSION_NUMBER == 1) || \
@@ -5648,6 +5660,26 @@ static apr_status_t wsgi_python_term()
     module = PyImport_ImportModule("atexit");
     Py_XDECREF(module);
 
+    /*
+     * In Python 2.6.5 and Python 3.1.2 the shutdown of
+     * threading was moved back into Py_Finalize() for the main
+     * Python interpreter. Because we shutting down threading
+     * ourselves, the second call results in errors being logged
+     * when Py_Finalize() is called and the shutdown function
+     * called a second time. The errors don't indicate any real
+     * problem and the threading module ignores them anyway.
+     * Whether we are using Python with this changed behaviour
+     * can only be checked by looking at run time version.
+     * Rather than try and add a dynamic check, create a fake
+     * 'dummy_threading' module as the presence of that shuts up
+     * the messages. It doesn't matter that the rest of the
+     * shutdown function still runs as everything is already
+     * stopped so doesn't do anything.
+     */
+
+    if (!PyImport_AddModule("dummy_threading"))
+        PyErr_Clear();
+
     Py_Finalize();
 
     wsgi_python_initialized = 0;
@@ -5768,7 +5800,7 @@ static void wsgi_python_init(apr_pool_t *p)
         }
 #endif
 
-	/*
+        /*
          * Work around bug in Python 3.1 where it will crash
          * when used in non console application on Windows if
          * stdin/stdout have been initialised and aren't null.
@@ -5944,9 +5976,9 @@ static InterpreterObject *wsgi_acquire_interpreter(const char *name)
         PyGILState_Ensure();
 
         /*
-	 * When simplified GIL state API is used, the thread
-	 * local data only persists for the extent of the top
-	 * level matching ensure/release calls. We want to
+         * When simplified GIL state API is used, the thread
+         * local data only persists for the extent of the top
+         * level matching ensure/release calls. We want to
          * extend lifetime of the thread local data beyond
          * that, retaining it for all requests within the one
          * thread for the life of the process. To do that we
@@ -6052,25 +6084,25 @@ static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
 
 #if defined(WIN32) && defined(APR_HAS_UNICODE_FS)
     if (wsgi_utf8_to_unicode_path(wfilename, sizeof(wfilename) /
-				  sizeof(apr_wchar_t), filename)) {
+                                  sizeof(apr_wchar_t), filename)) {
 
-	Py_BEGIN_ALLOW_THREADS
-	if (r) {
-	    ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
-			  "mod_wsgi (pid=%d, process='%s', "
-			  "application='%s'): Failed to convert '%s' "
-			  "to UCS2 filename.", getpid(),
-			  process_group, application_group, filename);
-	}
-	else {
-	    ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
-			 "mod_wsgi (pid=%d, process='%s', "
-			 "application='%s'): Failed to convert '%s' "
-			 "to UCS2 filename.", getpid(),
-			 process_group, application_group, filename);
-	}
-	Py_END_ALLOW_THREADS
-	return NULL;
+        Py_BEGIN_ALLOW_THREADS
+        if (r) {
+            ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r,
+                          "mod_wsgi (pid=%d, process='%s', "
+                          "application='%s'): Failed to convert '%s' "
+                          "to UCS2 filename.", getpid(),
+                          process_group, application_group, filename);
+        }
+        else {
+            ap_log_error(APLOG_MARK, WSGI_LOG_ERR(0), wsgi_server,
+                         "mod_wsgi (pid=%d, process='%s', "
+                         "application='%s'): Failed to convert '%s' "
+                         "to UCS2 filename.", getpid(),
+                         process_group, application_group, filename);
+        }
+        Py_END_ALLOW_THREADS
+        return NULL;
     }
 
     fp = _wfopen(wfilename, "r");
@@ -9988,8 +10020,28 @@ static int wsgi_setup_socket(WSGIProcessGroup *process)
         return -1;
     }
 
+    /*
+     * Set the ownership of the UNIX listener socket. This would
+     * normally be the Apache user that the Apache server child
+     * processes run as, as they are the only processes that
+     * would connect to the sockets. In the case of ITK MPM,
+     * having them owned by Apache user is useless as at the
+     * time the request is to be proxied, the Apache server
+     * child process will have uid corresponding to the user
+     * whose request they are handling. For ITK, thus set the
+     * ownership to be the same as the daemon processes. This is
+     * still restrictive, in that can only connect to daemon
+     * process group running under same user, but most of the
+     * time that is what you would want anyway when using ITK
+     * MPM.
+     */
+
     if (!geteuid()) {
+#if defined(MPM_ITK)
+        if (chown(process->socket, process->uid, -1) < 0) {
+#else
         if (chown(process->socket, ap_unixd_config.user_id, -1) < 0) {
+#endif
             ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(errno), wsgi_server,
                          "mod_wsgi (pid=%d): Couldn't change owner of unix "
                          "domain socket '%s'.", getpid(),
@@ -10157,7 +10209,7 @@ static apr_status_t wsgi_worker_release()
             }
             else {
                 /*
-		 * Flag that thread should be woken up and then
+                 * Flag that thread should be woken up and then
                  * signal it via the condition variable.
                  */
 
@@ -10469,7 +10521,7 @@ static void *wsgi_deadlock_thread(apr_thread_t *thd, void *data)
     apr_thread_mutex_unlock(wsgi_shutdown_lock);
 
     while (1) {
-        apr_sleep(apr_time_from_sec(1.0));
+        apr_sleep(apr_time_from_sec(1));
 
         PyEval_AcquireLock();
         PyEval_ReleaseLock();
@@ -10486,6 +10538,8 @@ static void *wsgi_deadlock_thread(apr_thread_t *thd, void *data)
 static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
 {
     WSGIDaemonProcess *daemon = data;
+
+    int restart = 0;
 
     if (wsgi_server_config->verbose_debugging) {
         ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
@@ -10506,8 +10560,6 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
         apr_time_t deadlock_time;
         apr_time_t inactivity_time;
 
-        int restart = 0;
-
         apr_interval_time_t period = 0;
 
         now = apr_time_now();
@@ -10517,37 +10569,44 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
         inactivity_time = wsgi_inactivity_shutdown_time;
         apr_thread_mutex_unlock(wsgi_shutdown_lock);
 
-        if (wsgi_deadlock_timeout && deadlock_time) {
-            if (deadlock_time <= now) {
-                ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
-                             "mod_wsgi (pid=%d): Daemon process deadlock "
-                             "timer expired, stopping process '%s'.",
-                             getpid(), daemon->group->name);
+        if (!restart && wsgi_deadlock_timeout) {
+            if (deadlock_time) {
+                if (deadlock_time <= now) {
+                    ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
+                                 "mod_wsgi (pid=%d): Daemon process deadlock "
+                                 "timer expired, stopping process '%s'.",
+                                 getpid(), daemon->group->name);
 
-                restart = 1;
-
-                period = wsgi_deadlock_timeout;
+                    restart = 1;
+                }
+                else {
+                    period = deadlock_time - now;
+                }
             }
             else {
-                period = deadlock_time - now;
+                period = wsgi_deadlock_timeout;
             }
         }
 
-        if (!restart && wsgi_inactivity_timeout && inactivity_time) {
-            if (inactivity_time <= now) {
-                ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
-                             "mod_wsgi (pid=%d): Daemon process inactivity "
-                             "timer expired, stopping process '%s'.",
-                             getpid(), daemon->group->name);
+        if (!restart && wsgi_inactivity_timeout) {
+            if (inactivity_time) {
+                if (inactivity_time <= now) {
+                    ap_log_error(APLOG_MARK, WSGI_LOG_INFO(0), wsgi_server,
+                                 "mod_wsgi (pid=%d): Daemon process "
+                                 "inactivity timer expired, stopping "
+                                 "process '%s'.", getpid(),
+                                 daemon->group->name);
 
-                restart = 1;
-
-                if (!period || (wsgi_inactivity_timeout < period))
-                    period = wsgi_inactivity_timeout;
+                    restart = 1;
+                }
+                else {
+                    if (!period || ((inactivity_time - now) < period))
+                        period = inactivity_time - now;
+                }
             }
             else {
-                if (!period || ((inactivity_time - now) < period))
-                    period = inactivity_time - now;
+                if (!period || (wsgi_inactivity_timeout < period))
+                    period = wsgi_inactivity_timeout;
             }
         }
 
@@ -10556,8 +10615,8 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
             kill(getpid(), SIGINT);
         }
 
-        if (period <= 0)
-            period = apr_time_from_sec(1.0);
+        if (restart || period <= 0)
+            period = apr_time_from_sec(1);
 
         apr_sleep(period);
     }
@@ -11110,32 +11169,44 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
             }
 
             /*
-            * Reassociate stderr output with error log from the
-            * virtual host the daemon is associated with. Close
-            * the virtual host error log and point it at stderr
-            * log instead. Do the latter so don't get two
-            * references to same open file. Just in case
-            * anything still accesses error log of main server,
-            * map main server error log to that of the virtual
-            * host. Note that cant do this if errors are being
-            * redirected to syslog, as indicated by virtual
-            * host error log being a null pointer. In that case
-            * just leave everything as it was. Also can't remap
-            * the error log for main server if it was being
-            * redirected to syslog but virtual host wasn't.
+             * Reassociate stderr output with error log from the
+             * virtual host the daemon is associated with. Close
+             * the virtual host error log and point it at stderr
+             * log instead. Do the latter so don't get two
+             * references to same open file. Just in case
+             * anything still accesses error log of main server,
+             * map main server error log to that of the virtual
+             * host. Note that cant do this if errors are being
+             * redirected to syslog, as indicated by virtual
+             * host error log being a null pointer. In that case
+             * just leave everything as it was. Also can't remap
+             * the error log for main server if it was being
+             * redirected to syslog but virtual host wasn't.
              */
 
             if (daemon->group->server->error_log  &&
                 daemon->group->server->error_log != wsgi_server->error_log) {
+
+                apr_file_t *oldfile = NULL;
+
                 apr_file_open_stderr(&errfile, wsgi_server->process->pool);
                 apr_file_dup2(errfile, daemon->group->server->error_log,
                               wsgi_server->process->pool);
 
-                apr_file_close(daemon->group->server->error_log);
-                daemon->group->server->error_log = errfile;
+                oldfile = daemon->group->server->error_log;
+
+                server = wsgi_server;
+
+                while (server != NULL) {
+                    if (server->error_log == oldfile)
+                        server->error_log = errfile;
+                    server = server->next;
+                }
+
+                apr_file_close(oldfile);
 
                 if (wsgi_server->error_log)
-                    wsgi_server->error_log = daemon->group->server->error_log;
+                    wsgi_server->error_log = errfile;
             }
         }
 
@@ -11150,10 +11221,8 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
             if (wsgi_server_config->verbose_debugging) {
                 ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
                              "mod_wsgi (pid=%d): Process '%s' logging to "
-                             "'%s' with log level %d.", getpid(),
-                             daemon->group->name,
-                             daemon->group->server->server_hostname,
-                             daemon->group->server->loglevel);
+                             "'%s'.", getpid(), daemon->group->name,
+                             daemon->group->server->server_hostname);
             }
 
             wsgi_server = daemon->group->server;
@@ -11162,9 +11231,8 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
             if (wsgi_server_config->verbose_debugging) {
                 ap_log_error(APLOG_MARK, WSGI_LOG_DEBUG(0), wsgi_server,
                              "mod_wsgi (pid=%d): Process '%s' forced to log "
-                             "to '%s' with log level %d.", getpid(),
-                             daemon->group->name, wsgi_server->server_hostname,
-                             wsgi_server->loglevel);
+                             "to '%s'.", getpid(), daemon->group->name,
+                             wsgi_server->server_hostname);
             }
         }
 
@@ -11434,7 +11502,7 @@ static int wsgi_connect_daemon(request_rec *r, WSGIDaemonSocket *daemon)
     struct sockaddr_un addr;
 
     int retries = 0;
-    apr_interval_time_t timer = apr_time_from_sec(0.1);
+    apr_interval_time_t timer = 0;
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -11461,11 +11529,19 @@ static int wsgi_connect_daemon(request_rec *r, WSGIDaemonSocket *daemon)
 
                 close(daemon->fd);
 
-                /* Increase wait time up to maximum of 2 seconds. */
+                /*
+		 * Progressively increase time we wait between
+		 * connection attempts. Start at 0.1 second and
+                 * double each time but apply ceiling at 2.0
+                 * seconds.
+                 */
+
+                if (!timer)
+                    timer = apr_time_make(0, 100000);
 
                 apr_sleep(timer);
-                if (timer < apr_time_from_sec(2))
-                    timer *= 2;
+
+                timer = (2 * timer) % apr_time_make(2, 0);
             }
             else {
                 ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(errno), r,
@@ -14595,7 +14671,7 @@ static authz_status wsgi_check_authorization(request_rec *r,
 
     if (apr_table_elts(grpstatus)->nelts == 0) {
         ap_log_rerror(APLOG_MARK, WSGI_LOG_ERR(0), r, "mod_wsgi (pid=%d): "
-                      "Authorization of user '%s' to access '%s' failed. ",
+                      "Authorization of user '%s' to access '%s' failed. "
                       "User is not a member of any groups.", getpid(),
                       r->user, r->uri);
         return AUTHZ_DENIED;

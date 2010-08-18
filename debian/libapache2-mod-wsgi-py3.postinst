@@ -14,9 +14,9 @@ apache_force_reload() {
 
 update_symlink() {
     wsgi_py=`readlink /usr/lib/apache2/modules/mod_wsgi.so | sed 's,.*-,,'`
-    py_default=`dpkg -s python | grep '^Version' | sed 's,Version: \([^.]*.[^.]*\).*,\1,'`
-    if [ ! "${wsgi_py}" = "${py_default}" ]; then
-        ln -sf mod_wsgi.so-${py_default} /usr/lib/apache2/modules/mod_wsgi.so
+    py3_default=`dpkg -s python3 | grep '^Version' | sed 's,Version: \([^.]*.[^.]*\).*,\1,'`
+    if [ ! "${wsgi_py}" = "${py3_default}" ]; then
+        ln -sf mod_wsgi.so-${py3_default} /usr/lib/apache2/modules/mod_wsgi.so
     fi
 }
 
