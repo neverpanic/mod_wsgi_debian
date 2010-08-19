@@ -1,4 +1,4 @@
-mod-wsgi (3.2-3) UNRELEASED; urgency=low
+mod-wsgi (3.3-1) unstable; urgency=low
 
   [ Sameer Rahmani ]
   * watch file fixed.
@@ -10,9 +10,12 @@ mod-wsgi (3.2-3) UNRELEASED; urgency=low
     rebuild of mod-wsgi), but it needs to be handled properly.
 
   [ Piotr Ożarowski ]
+  * New upstream release
+  * Move Python 3.X extension to new libapache2-mod-wsgi-py3 binary package
   * Provide httpd-wsgi (see #588497)
+  * Bump Standards-Version to 3.9.1 (no changes needed)
 
- -- Bernd Zeimetz <bzed@debian.org>  Fri, 02 Jul 2010 13:54:04 +0200
+ -- Piotr Ożarowski <piotr@debian.org>  Wed, 18 Aug 2010 23:40:10 +0200
 
 mod-wsgi (3.2-2) unstable; urgency=low
 
