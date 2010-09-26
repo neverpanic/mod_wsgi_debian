@@ -1,3 +1,9 @@
+mod-wsgi (3.3-2) unstable; urgency=low
+
+  * Rebuild for Python 2.6.6 (Closes: #597915) 
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 26 Sep 2010 22:45:52 +0200
+
 mod-wsgi (3.3-1) unstable; urgency=low
 
   [ Sameer Rahmani ]
