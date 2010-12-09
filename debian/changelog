@@ -1,3 +1,9 @@
+mod-wsgi (3.3-3) experimental; urgency=low
+
+  * Rebuild to add Python 2.7 bindings
+
+ -- Piotr Ożarowski <piotr@debian.org>  Thu, 09 Dec 2010 22:15:43 +0100
+
 mod-wsgi (3.3-2) unstable; urgency=low
 
   * Rebuild for Python 2.6.6 (Closes: #597915) 
