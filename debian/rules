@@ -28,7 +28,9 @@ build-%/build-stamp: build-%/config.status
 	$(MAKE) -C build-$*
 	touch $@
 
-build: $(PYVERS:%=build-%/build-stamp) $(PY3VERS:%=build-%/build-stamp)
+build: build-arch
+build-arch: $(PYVERS:%=build-%/build-stamp) $(PY3VERS:%=build-%/build-stamp)
+build-indep:
 
 clean:
 	dh_testdir
