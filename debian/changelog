@@ -1,3 +1,17 @@
+mod-wsgi (3.3-4) unstable; urgency=low
+
+  [ James Page ]
+  * Add a patch for Python 3.2 compatibility 
+    - debian/patches/python-3.2-compat.patch: full patch to support 
+      python >= 3.2 from Graham Dumpleton.
+  * Converted to source/format "3.0 (quilt)"
+
+  [ Piotr Ożarowski ]
+  * Add build-arch and build-indep targets in debian/rules
+  * Bump Standards-Version to 3.9.2 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Thu, 06 Oct 2011 20:38:03 +0200
+
 mod-wsgi (3.3-2) unstable; urgency=low
 
   * Rebuild for Python 2.6.6 (Closes: #597915) 
