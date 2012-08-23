@@ -1,3 +1,10 @@
+mod-wsgi (3.4-1) experimental; urgency=low
+
+  * New upstream release.
+  * d/p/python-3.2-compat.patch: Dropped, superseded by new release.
+
+ -- Clint Byrum <clint@ubuntu.com>  Thu, 23 Aug 2012 16:34:39 -0700
+
 mod-wsgi (3.3-4) unstable; urgency=low
 
   [ James Page ]
