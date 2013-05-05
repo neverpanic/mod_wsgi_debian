@@ -6,8 +6,8 @@ Uploaders: Bernd Zeimetz <bzed@debian.org>, Piotr Ożarowski <piotr@debian.org>
 Build-Depends: debhelper (>= 5), python-all-dev, python3-all-dev, apache2-threaded-dev
 Homepage: http://www.modwsgi.org/
 Standards-Version: 3.9.2
-Vcs-Svn: svn://svn.debian.org/python-modules/packages/mod-wsgi/trunk/
-Vcs-Browser: http://svn.debian.org/viewsvn/python-modules/packages/mod-wsgi/trunk/
+Vcs-Svn: svn://anonscm.debian.org/python-modules/packages/mod-wsgi/trunk/
+Vcs-Browser: http://anonscm.debian.org/viewvc/python-modules/packages/mod-wsgi/trunk/
 
 Package: libapache2-mod-wsgi
 Architecture: any
