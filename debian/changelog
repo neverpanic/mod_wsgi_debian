@@ -10,6 +10,7 @@ mod-wsgi (3.4-2) UNRELEASED; urgency=low
       instead of python-distutils.
   * Add support for Apache 2.4. Thanks to Ondřej Surý for the patch.
     (Closes: #666818)
+  * Export build flags using /usr/share/dpkg/buildflags.mk.
 
  -- Jakub Wilk <jwilk@debian.org>  Sun, 05 May 2013 16:01:16 +0200
 
