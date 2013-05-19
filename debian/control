@@ -3,7 +3,7 @@ Section: httpd
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
 Uploaders: Bernd Zeimetz <bzed@debian.org>, Piotr Ożarowski <piotr@debian.org>
-Build-Depends: debhelper (>= 5), python-all-dev, python3-all-dev, apache2-threaded-dev
+Build-Depends: debhelper (>= 5), python-all-dev, python3-all-dev, apache2-threaded-dev, dh-autoreconf
 Homepage: http://www.modwsgi.org/
 Standards-Version: 3.9.2
 Vcs-Svn: svn://anonscm.debian.org/python-modules/packages/mod-wsgi/trunk/

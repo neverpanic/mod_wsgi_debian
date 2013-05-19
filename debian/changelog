@@ -1,6 +1,13 @@
 mod-wsgi (3.4-2) UNRELEASED; urgency=low
 
+  [ Jakub Wilk ]
   * Use canonical URIs for Vcs-* fields.
+
+  [ Felix Geyer ]
+  * Fix building against python3.3. Thanks to Dmitrijs Ledkovs for the
+    initial patch. (Closes: #692390)
+    - Add python-config.patch to make configure.ac query pythonX.Y-config
+      instead of python-distutils.
 
  -- Jakub Wilk <jwilk@debian.org>  Sun, 05 May 2013 16:01:16 +0200
 
