@@ -8,6 +8,8 @@ mod-wsgi (3.4-2) UNRELEASED; urgency=low
     initial patch. (Closes: #692390)
     - Add python-config.patch to make configure.ac query pythonX.Y-config
       instead of python-distutils.
+  * Add support for Apache 2.4. Thanks to Ondřej Surý for the patch.
+    (Closes: #666818)
 
  -- Jakub Wilk <jwilk@debian.org>  Sun, 05 May 2013 16:01:16 +0200
 

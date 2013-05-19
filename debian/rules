@@ -67,6 +67,7 @@ binary-arch: build install
 	dh_installchangelogs 
 	dh_installdocs
 	dh_install
+	dh_apache2
 	install -d -m 755 debian/$(PACKAGE)/usr/share/python/runtime.d
 	install -d -m 755 debian/$(PACKAGE)-py3/usr/share/python3/runtime.d
 	install -m 755 debian/$(PACKAGE).rtupdate debian/$(PACKAGE)/usr/share/python/runtime.d/
