@@ -1,4 +1,4 @@
-mod-wsgi (3.4-2) UNRELEASED; urgency=low
+mod-wsgi (3.4-2) experimental; urgency=low
 
   [ Jakub Wilk ]
   * Use canonical URIs for Vcs-* fields.
@@ -13,7 +13,11 @@ mod-wsgi (3.4-2) UNRELEASED; urgency=low
   * Export build flags using /usr/share/dpkg/buildflags.mk.
   * Bump Standards-Version to 3.9.4, no changes needed.
 
- -- Jakub Wilk <jwilk@debian.org>  Sun, 05 May 2013 16:01:16 +0200
+  [ Piotr Ożarowski ]
+  * Add temporary python (>= 3.3) build dependency to make sure
+    python3-defaults from experimental is used during build
+
+ -- Piotr Ożarowski <piotr@debian.org>  Tue, 21 May 2013 22:03:58 +0200
 
 mod-wsgi (3.4-1) experimental; urgency=low
 
