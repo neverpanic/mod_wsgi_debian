@@ -1,3 +1,24 @@
+mod-wsgi (3.4-2) experimental; urgency=low
+
+  [ Jakub Wilk ]
+  * Use canonical URIs for Vcs-* fields.
+
+  [ Felix Geyer ]
+  * Fix building against python3.3. Thanks to Dmitrijs Ledkovs for the
+    initial patch. (Closes: #692390)
+    - Add python-config.patch to make configure.ac query pythonX.Y-config
+      instead of python-distutils.
+  * Add support for Apache 2.4. Thanks to Ondřej Surý for the patch.
+    (Closes: #666818)
+  * Export build flags using /usr/share/dpkg/buildflags.mk.
+  * Bump Standards-Version to 3.9.4, no changes needed.
+
+  [ Piotr Ożarowski ]
+  * Add temporary python (>= 3.3) build dependency to make sure
+    python3-defaults from experimental is used during build
+
+ -- Piotr Ożarowski <piotr@debian.org>  Tue, 21 May 2013 22:03:58 +0200
+
 mod-wsgi (3.4-1) experimental; urgency=low
 
   * New upstream release.
