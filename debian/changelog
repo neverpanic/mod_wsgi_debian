@@ -1,3 +1,10 @@
+mod-wsgi (3.4-3) unstable; urgency=low
+
+  * Upload to unstable (python3 build dependency removed)
+  * Remove myself from Uploaders
+
+ -- Piotr Ożarowski <piotr@debian.org>  Thu, 30 May 2013 19:28:43 +0200
+
 mod-wsgi (3.4-2) experimental; urgency=low
 
   [ Jakub Wilk ]
