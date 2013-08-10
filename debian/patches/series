@@ -1,1 +1,2 @@
 python-config.patch
+fix_crash_daemon_mode.patch
