@@ -1,14 +1,28 @@
-mod-wsgi (3.3-2+deb6u1) squeeze-security; urgency=high
+mod-wsgi (3.3-4+deb7u1) wheezy-security; urgency=high
 
   * Fix possibility of local privilege escalation when using daemon mode.
     (Closes: #748910)
     - CVE-2014-0240
-    - Backport upstream commit d9d5fea.
+    - debian/patches/CVE-2014-0240.patch: backport upstream commit
   * Fix possibility of disclosure via Content-Type response header.
     - CVE-2014-0242
-    - Backport upstream commit b0a149c.
+    - debian/patches/CVE-2014-0242.patch: backport upstream commit
 
- -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 22:44:27 +0200
+ -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 22:20:57 +0200
+
+mod-wsgi (3.3-4) unstable; urgency=low
+
+  [ James Page ]
+  * Add a patch for Python 3.2 compatibility 
+    - debian/patches/python-3.2-compat.patch: full patch to support 
+      python >= 3.2 from Graham Dumpleton.
+  * Converted to source/format "3.0 (quilt)"
+
+  [ Piotr Ożarowski ]
+  * Add build-arch and build-indep targets in debian/rules
+  * Bump Standards-Version to 3.9.2 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Thu, 06 Oct 2011 20:38:03 +0200
 
 mod-wsgi (3.3-2) unstable; urgency=low
 

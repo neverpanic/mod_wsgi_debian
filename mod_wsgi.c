@@ -3187,7 +3187,7 @@ static int Adapter_output(AdapterObject *self, const char *data, int length,
                 if (*self->config->process_group)
                     r->content_type = apr_pstrdup(r->pool, value);
                 else
-                    ap_set_content_type(r, apr_pstrdup(r->pool, value));
+                    ap_set_content_type(r, value);
 #endif
             }
             else if (!strcasecmp(name, "Content-Length")) {
@@ -9942,19 +9942,6 @@ static void wsgi_setup_access(WSGIDaemonProcess *daemon)
         ap_log_error(APLOG_MARK, WSGI_LOG_ALERT(errno), wsgi_server,
                      "mod_wsgi (pid=%d): Unable to change to uid=%ld.",
                      getpid(), (long)daemon->group->uid);
-
-        /*
-         * On true UNIX systems this should always succeed at
-         * this point. With certain Linux kernel versions though
-         * we can get back EAGAIN where the target user had
-         * reached their process limit. In that case will be left
-         * running as wrong user. Just exit on all failures to be
-         * safe. Don't die immediately to avoid a fork bomb.
-         */
-
-        sleep(20);
-
-        exit(-1);
     }
 }
 
