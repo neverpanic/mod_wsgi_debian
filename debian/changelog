@@ -1,8 +1,70 @@
-mod-wsgi (2.8-1~bpo50+1) lenny-backports; urgency=low
+mod-wsgi (3.3-2+deb6u1) squeeze-security; urgency=high
 
-  * Rebuild for lenny-backports.
+  * Fix possibility of local privilege escalation when using daemon mode.
+    (Closes: #748910)
+    - CVE-2014-0240
+    - Backport upstream commit d9d5fea.
+  * Fix possibility of disclosure via Content-Type response header.
+    - CVE-2014-0242
+    - Backport upstream commit b0a149c.
 
- -- Piotr Ożarowski <piotr@debian.org>  Sat, 16 Jan 2010 16:41:00 +0100
+ -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 22:44:27 +0200
+
+mod-wsgi (3.3-2) unstable; urgency=low
+
+  * Rebuild for Python 2.6.6 (Closes: #597915) 
+
+ -- Piotr Ożarowski <piotr@debian.org>  Sun, 26 Sep 2010 22:45:52 +0200
+
+mod-wsgi (3.3-1) unstable; urgency=low
+
+  [ Sameer Rahmani ]
+  * watch file fixed.
+
+  [ Bernd Zeimetz ]
+  * Ensure that the mod-wsgi symlink is updated to the current default Python
+    version while installing/upgrading the package. This is only necessary
+    in rare cases (when the default Python version was updated after the last
+    rebuild of mod-wsgi), but it needs to be handled properly.
+
+  [ Piotr Ożarowski ]
+  * New upstream release
+  * Move Python 3.X extension to new libapache2-mod-wsgi-py3 binary package
+  * Provide httpd-wsgi (see #588497)
+  * Bump Standards-Version to 3.9.1 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Wed, 18 Aug 2010 23:40:10 +0200
+
+mod-wsgi (3.2-2) unstable; urgency=low
+
+  * mod-wsgi needs to depend on libpython for Python > 2.5.
+    (Closes: #580425) 
+
+ -- Bernd Zeimetz <bzed@debian.org>  Wed, 12 May 2010 18:12:36 +0200
+
+mod-wsgi (3.2-1) unstable; urgency=low
+
+  * New upstream release
+  * Build Python 3.X version of the module
+    - python3-all-dev added to build dependencies
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 22 Mar 2010 20:05:19 +0100
+
+mod-wsgi (2.8-2) unstable; urgency=low
+
+  * Restart Apache instead of reloading config file in postinst (temporary
+    workaround for bug #558608)
+  * Section changed to "httpd"
+  * Bump Standards-Version to 3.8.4 (no changes needed)
+
+ -- Piotr Ożarowski <piotr@debian.org>  Mon, 01 Feb 2010 21:03:25 +0100
+
+mod-wsgi (3.1-1) experimental; urgency=low
+
+  * New upstream release.
+  * Update wsgi.conf example. 
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 19 Dec 2009 12:59:50 +0100
 
 mod-wsgi (2.8-1) unstable; urgency=low
 

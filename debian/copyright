@@ -9,7 +9,7 @@ Upstream Author:
 
 Copyright: 
 
-    Copyright 2007-2009 GRAHAM DUMPLETON
+    Copyright 2007-2010 GRAHAM DUMPLETON
 
 License:
 
@@ -28,5 +28,5 @@ License:
 On Debian systems the full text of the Apache License, Version 2,
 can be found in `/usr/share/common-licenses/Apache-2.0'.
 
-The Debian packaging is © 2007-2009, Bernd Zeimetz <bernd@bzed.de> and
+The Debian packaging is © 2007-2010, Bernd Zeimetz <bernd@bzed.de> and
 is licensed under the Apache License, Version 2.0, see below.
