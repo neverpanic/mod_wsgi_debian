@@ -5,6 +5,7 @@ mod-wsgi (3.5-1) UNRELEASED; urgency=high
   * Drop fix_crash_daemon_mode.patch, applied upstream.
   * Refresh python-config.patch.
   * Drop obsolete shlibs.local.
+  * Update watch file to check GitHub instead of Google Code.
 
  -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 19:35:23 +0200
 
