@@ -6,6 +6,7 @@ mod-wsgi (3.5-1) UNRELEASED; urgency=high
   * Refresh python-config.patch.
   * Drop obsolete shlibs.local.
   * Update watch file to check GitHub instead of Google Code.
+  * Bump Standards-Version to 3.9.5, no changes needed.
 
  -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 19:35:23 +0200
 
