@@ -1,3 +1,10 @@
+mod-wsgi (3.5-1) UNRELEASED; urgency=high
+
+  * New upstream release.
+    - Fixes CVE-2014-0240: Local privilege escalation when using daemon mode.
+
+ -- Felix Geyer <fgeyer@debian.org>  Wed, 21 May 2014 19:35:23 +0200
+
 mod-wsgi (3.4-4) unstable; urgency=low
 
   * Fix wsgi applications segfaulting when run in daemon mode under Apache 2.4.
