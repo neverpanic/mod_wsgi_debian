@@ -1,0 +1,33 @@
+#!/bin/sh
+
+set -e
+
+cat > /etc/apache2/conf-enabled/wsgi-daemon-py3.conf <<EOT
+WSGIScriptAlias /wsgi-daemon-py3/ /var/www/hello-py3/hello.wsgi
+WSGIDaemonProcess embeddedpy3 processes=2 threads=15
+<Directory /var/www/hellow-py3>
+  WSGIProcessGroup embeddedpy3
+</Directory>
+EOT
+
+mkdir -p /var/www/hello-py3
+
+cat > /var/www/hello-py3/hello.wsgi <<EOT
+def application(environ, start_response):
+    status = '200 OK'
+    output = b'Hello World'
+
+    response_headers = [('Content-type', 'text/plain'),
+                        ('Content-Length', str(len(output)))]
+    start_response(status, response_headers)
+
+    return [output]
+EOT
+
+chown -R www-data:www-data /var/www/hello-py3/hello.wsgi
+
+a2enmod wsgi
+service apache2 reload
+
+output=`wget -O- http://localhost/wsgi-daemon-py3/ 2>/dev/null`
+test "$output" = "Hello World"
