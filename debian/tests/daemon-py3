@@ -29,5 +29,18 @@ chown -R www-data:www-data /var/www/hello-py3/hello.wsgi
 a2enmod wsgi
 service apache2 reload
 
-output=`wget -O- http://localhost/wsgi-daemon-py3/ 2>/dev/null`
-test "$output" = "Hello World"
+if ! output=`wget -O- http://localhost/wsgi-daemon-py3/ 2>/dev/null`; then
+  echo "wget failed, output was:"
+  echo "$output"
+  echo
+  echo "Retest:"
+  wget -O- http://localhost/wsgi-daemon-py3/
+  exit 1
+else
+  if [ "$output" != "Hello World" ]; then
+    echo "output is wrong"
+    echo "got:      | $output |"
+    echo "expected: | Hello World |"
+    exit 1
+  fi
+fi
