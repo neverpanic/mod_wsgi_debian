@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import os
 import sys
+import locale
 
 try:
     from cStringIO import StringIO
@@ -22,6 +23,7 @@ def application(environ, start_response):
     print('PID: %s' % os.getpid(), file=output)
     print('UID: %s' % os.getuid(), file=output)
     print('GID: %s' % os.getgid(), file=output)
+    print('CWD: %s' % os.getcwd(), file=output)
     print(file=output)
 
     print('python.version: %r' % (sys.version,), file=output)
@@ -66,6 +68,20 @@ def application(environ, start_response):
     print('PATH: %s' % sys.path, file=output)
     print(file=output)
 
+    print('LANG: %s' % os.environ.get('LANG'), file=output)
+    print('LC_ALL: %s' % os.environ.get('LC_ALL'), file=output)
+    print('sys.getdefaultencoding(): %s' % sys.getdefaultencoding(),
+            file=output)
+    print('sys.getfilesystemencoding(): %s' % sys.getfilesystemencoding(),
+            file=output)
+    print('locale.getlocale(): %s' % (locale.getlocale(),),
+            file=output)
+    print('locale.getdefaultlocale(): %s' % (locale.getdefaultlocale(),),
+            file=output)
+    print('locale.getpreferredencoding(): %s' % locale.getpreferredencoding(),
+            file=output)
+    print(file=output)
+
     keys = sorted(environ.keys())
     for key in keys:
         print('%s: %s' % (key, repr(environ[key])), file=output)
@@ -83,4 +99,9 @@ def application(environ, start_response):
 
     yield result
 
-    yield input.read(int(environ.get('CONTENT_LENGTH', '0')))
+    block_size = 8192
+
+    data = input.read(block_size)
+    while data:
+        yield data
+        data = input.read(block_size)

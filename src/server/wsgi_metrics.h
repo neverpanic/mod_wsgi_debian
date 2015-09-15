@@ -4,7 +4,7 @@
 /* ------------------------------------------------------------------------- */
 
 /*
- * Copyright 2007-2014 GRAHAM DUMPLETON
+ * Copyright 2007-2015 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 
 /* ------------------------------------------------------------------------- */
 
+extern apr_uint64_t wsgi_total_requests;
 extern int wsgi_active_requests;
 extern int wsgi_dump_stack_traces;
 

@@ -2,6 +2,9 @@
 MOD_WSGI
 ========
 
+Overview
+--------
+
 The mod_wsgi package provides an Apache module that implements a WSGI
 compliant interface for hosting Python based web applications on top of the
 Apache web server.
@@ -38,8 +41,8 @@ If running Linux, any corresponding developer variant of the specific
 Apache package you are using also needs to be installed. This is required
 in order to be able to compile mod_wsgi from source code.
 
-For example, on Ubuntu Linux, if you were using the Apache prefork MPM
-you would need both:
+For example, on Ubuntu Linux with Apache 2.2, if you were using the Apache
+prefork MPM you would need both:
 
 * apache2-mpm-prefork
 * apache2-prefork-dev
@@ -292,30 +295,4 @@ agent configuration file.
     NEW_RELIC_CONFIG_FILE=`pwd`/newrelic.ini
     export NEW_RELIC_CONFIG_FILE
 
-    mod_wsgi-express wsgi.py --with-newrelic
-
-When using this option, if you have also installed the ``mod_wsgi-metrics``
-Python package, then additional metrics about Apache and mod_wsgi will also
-be reported via the New Relic Platform API. These will appear as a separate
-set of dashboards under 'mod_wsgi' in the left hand side navigation bar of
-the New Relic UI.
-
-New Relic provides a free Lite tier so there is no excuse for not using it.
-Learn about what your Python web application is really doing. [1]_
-
-Using mod_wsgi express with wdb (Web Debugger)
-----------------------------------------------
-
-If a fan of `wdb <https://github.com/Kozea/wdb>`_ for debugging your web
-application during development, and you already have that installed, you
-can use the ``--with-wdb`` option.
-
-::
-
-    mod_wsgi-express wsgi.py --with-wdb
-
-You do not need to start the wdb server yourself, it will be automatically
-started and managed for you.
-
-.. [1] Disclaimer: I work for New Relic and am the primary developer of
-       the Python agent. So of course it is awesome. :-)
+    mod_wsgi-express start-server wsgi.py --with-newrelic

@@ -1,3 +1,11 @@
+mod-wsgi (4.4.13-0.1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+  * Ran wrap-and-sort -t -a.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 15 Sep 2015 13:29:03 +0000
+
 mod-wsgi (4.3.0-1) unstable; urgency=medium
 
   [ Felix Geyer ]

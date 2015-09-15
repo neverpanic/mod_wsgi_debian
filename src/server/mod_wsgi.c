@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------------------- */
 
 /*
- * Copyright 2007-2014 GRAHAM DUMPLETON
+ * Copyright 2007-2015 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,6 +85,7 @@ static apr_interval_time_t wsgi_deadlock_timeout = 0;
 static apr_interval_time_t wsgi_idle_timeout = 0;
 static apr_interval_time_t wsgi_request_timeout = 0;
 static apr_interval_time_t wsgi_graceful_timeout = 0;
+static apr_interval_time_t wsgi_eviction_timeout = 0;
 static apr_time_t volatile wsgi_deadlock_shutdown_time = 0;
 static apr_time_t volatile wsgi_idle_shutdown_time = 0;
 static apr_time_t volatile wsgi_graceful_shutdown_time = 0;
@@ -183,6 +184,16 @@ static void *wsgi_merge_server_config(apr_pool_t *p, void *base_conf,
     else
         config->map_head_to_get = parent->map_head_to_get;
 
+    if (child->trusted_proxy_headers)
+        config->trusted_proxy_headers = child->trusted_proxy_headers;
+    else
+        config->trusted_proxy_headers = parent->trusted_proxy_headers;
+
+    if (child->trusted_proxies)
+        config->trusted_proxies = child->trusted_proxies;
+    else
+        config->trusted_proxies = parent->trusted_proxies;
+
     if (child->enable_sendfile != -1)
         config->enable_sendfile = child->enable_sendfile;
     else
@@ -218,6 +229,9 @@ typedef struct {
     int chunked_request;
     int map_head_to_get;
 
+    apr_array_header_t *trusted_proxy_headers;
+    apr_array_header_t *trusted_proxies;
+
     int enable_sendfile;
 
     WSGIScriptFile *access_script;
@@ -249,6 +263,9 @@ static WSGIDirectoryConfig *newWSGIDirectoryConfig(apr_pool_t *p)
     object->error_override = -1;
     object->chunked_request = -1;
     object->map_head_to_get = -1;
+
+    object->trusted_proxy_headers = NULL;
+    object->trusted_proxies = NULL;
 
     object->enable_sendfile = -1;
 
@@ -337,6 +354,16 @@ static void *wsgi_merge_dir_config(apr_pool_t *p, void *base_conf,
     else
         config->map_head_to_get = parent->map_head_to_get;
 
+    if (child->trusted_proxy_headers)
+        config->trusted_proxy_headers = child->trusted_proxy_headers;
+    else
+        config->trusted_proxy_headers = parent->trusted_proxy_headers;
+
+    if (child->trusted_proxies)
+        config->trusted_proxies = child->trusted_proxies;
+    else
+        config->trusted_proxies = parent->trusted_proxies;
+
     if (child->enable_sendfile != -1)
         config->enable_sendfile = child->enable_sendfile;
     else
@@ -396,6 +423,9 @@ typedef struct {
     int error_override;
     int chunked_request;
     int map_head_to_get;
+
+    apr_array_header_t *trusted_proxy_headers;
+    apr_array_header_t *trusted_proxies;
 
     int enable_sendfile;
 
@@ -464,6 +494,10 @@ static const char *wsgi_process_group(request_rec *r, const char *s)
     const char *name = NULL;
     const char *value = NULL;
 
+    const char *h = NULL;
+    apr_port_t p = 0;
+    const char *n = NULL;
+
     if (!s)
         return "";
 
@@ -475,6 +509,45 @@ static const char *wsgi_process_group(request_rec *r, const char *s)
     if (*name) {
         if (!strcmp(name, "{GLOBAL}"))
             return "";
+
+        if (!strcmp(name, "{RESOURCE}")) {
+            h = r->server->server_hostname;
+            p = ap_get_server_port(r);
+            n = wsgi_script_name(r);
+
+            if (p != DEFAULT_HTTP_PORT && p != DEFAULT_HTTPS_PORT)
+                return apr_psprintf(r->pool, "%s:%u|%s", h, p, n);
+            else
+                return apr_psprintf(r->pool, "%s|%s", h, n);
+        }
+
+        if (!strcmp(name, "{SERVER}")) {
+            h = r->server->server_hostname;
+            p = ap_get_server_port(r);
+
+            if (p != DEFAULT_HTTP_PORT && p != DEFAULT_HTTPS_PORT)
+                return apr_psprintf(r->pool, "%s:%u", h, p);
+            else
+                return h;
+        }
+
+        if (!strcmp(name, "{HOST}")) {
+            h = r->hostname;
+            p = ap_get_server_port(r);
+
+            /*
+             * The Host header could be empty or absent for HTTP/1.0
+             * or older. In that case fallback to ServerName.
+             */
+
+            if (h == NULL || *h == 0)
+                h = r->server->server_hostname;
+
+            if (p != DEFAULT_HTTP_PORT && p != DEFAULT_HTTPS_PORT)
+                return apr_psprintf(r->pool, "%s:%u", h, p);
+            else
+                return h;
+        }
 
         if (strstr(name, "{ENV:") == name) {
             long len = 0;
@@ -522,6 +595,9 @@ static const char *wsgi_server_group(request_rec *r, const char *s)
     name = s + 1;
 
     if (*name) {
+        if (!strcmp(name, "{GLOBAL}"))
+            return "";
+
         if (!strcmp(name, "{SERVER}")) {
             h = r->server->server_hostname;
             p = ap_get_server_port(r);
@@ -532,8 +608,23 @@ static const char *wsgi_server_group(request_rec *r, const char *s)
                 return h;
         }
 
-        if (!strcmp(name, "{GLOBAL}"))
-            return "";
+        if (!strcmp(name, "{HOST}")) {
+            h = r->hostname;
+            p = ap_get_server_port(r);
+
+            /*
+             * The Host header could be empty or absent for HTTP/1.0
+             * or older. In that case fallback to ServerName.
+             */
+
+            if (h == NULL || *h == 0)
+                h = r->server->server_hostname;
+
+            if (p != DEFAULT_HTTP_PORT && p != DEFAULT_HTTPS_PORT)
+                return apr_psprintf(r->pool, "%s:%u", h, p);
+            else
+                return h;
+        }
     }
 
     return s;
@@ -565,6 +656,9 @@ static const char *wsgi_application_group(request_rec *r, const char *s)
     name = s + 1;
 
     if (*name) {
+        if (!strcmp(name, "{GLOBAL}"))
+            return "";
+
         if (!strcmp(name, "{RESOURCE}")) {
             h = r->server->server_hostname;
             p = ap_get_server_port(r);
@@ -586,8 +680,23 @@ static const char *wsgi_application_group(request_rec *r, const char *s)
                 return h;
         }
 
-        if (!strcmp(name, "{GLOBAL}"))
-            return "";
+        if (!strcmp(name, "{HOST}")) {
+            h = r->hostname;
+            p = ap_get_server_port(r);
+
+            /*
+             * The Host header could be empty or absent for HTTP/1.0
+             * or older. In that case fallback to ServerName.
+             */
+
+            if (h == NULL || *h == 0)
+                h = r->server->server_hostname;
+
+            if (p != DEFAULT_HTTP_PORT && p != DEFAULT_HTTPS_PORT)
+                return apr_psprintf(r->pool, "%s:%u", h, p);
+            else
+                return h;
+        }
 
         if (strstr(name, "{ENV:") == name) {
             long len = 0;
@@ -753,6 +862,16 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
             config->map_head_to_get = 2;
     }
 
+    config->trusted_proxy_headers = dconfig->trusted_proxy_headers;
+
+    if (!config->trusted_proxy_headers)
+        config->trusted_proxy_headers = sconfig->trusted_proxy_headers;
+
+    config->trusted_proxies = dconfig->trusted_proxies;
+
+    if (!config->trusted_proxies)
+        config->trusted_proxies = sconfig->trusted_proxies;
+
     config->enable_sendfile = dconfig->enable_sendfile;
 
     if (config->enable_sendfile < 0) {
@@ -794,6 +913,20 @@ static WSGIRequestConfig *wsgi_create_req_config(apr_pool_t *p, request_rec *r)
     return config;
 }
 
+/* Error reporting. */
+
+static void wsgi_log_script_error(request_rec *r, const char *e, const char *n)
+{
+    char *message = NULL;
+
+    if (!n)
+        n = r->filename;
+
+    message = apr_psprintf(r->pool, "%s: %s", e, n);
+
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", message);
+}
+
 /* Class objects used by response handler. */
 
 static PyTypeObject Dispatch_Type;
@@ -807,6 +940,9 @@ typedef struct {
         apr_size_t size;
         apr_size_t offset;
         apr_size_t length;
+        apr_bucket_brigade *bb;
+        int seen_eos;
+        int seen_error;
 } InputObject;
 
 static PyTypeObject Input_Type;
@@ -828,6 +964,11 @@ static InputObject *newInputObject(request_rec *r)
     self->offset = 0;
     self->length = 0;
 
+    self->bb = NULL;
+
+    self->seen_eos = 0;
+    self->seen_error = 0;
+
     return self;
 }
 
@@ -839,6 +980,19 @@ static void Input_dealloc(InputObject *self)
     PyObject_Del(self);
 }
 
+static void Input_finish(InputObject *self)
+{
+    if (self->bb) {
+        Py_BEGIN_ALLOW_THREADS
+        apr_brigade_destroy(self->bb);
+        Py_END_ALLOW_THREADS
+
+        self->bb = NULL;
+    }
+
+    self->r = NULL;
+}
+
 static PyObject *Input_close(InputObject *self, PyObject *args)
 {
     if (!self->r) {
@@ -848,6 +1002,179 @@ static PyObject *Input_close(InputObject *self, PyObject *args)
 
     Py_INCREF(Py_None);
     return Py_None;
+}
+
+static apr_status_t wsgi_strtoff(apr_off_t *offset, const char *nptr,
+                                 char **endptr, int base)
+{
+   errno = 0;
+   if (sizeof(apr_off_t) == 4) {
+       *offset = strtol(nptr, endptr, base);
+   }
+   else {
+       *offset = apr_strtoi64(nptr, endptr, base);
+   }
+   return APR_FROM_OS_ERROR(errno);
+}
+
+static long Input_read_from_input(InputObject *self, char *buffer,
+                                  apr_size_t bufsiz)
+{
+    request_rec *r = self->r;
+    apr_bucket_brigade *bb = self->bb;
+
+    apr_status_t rv;
+
+    apr_status_t error_status = 0;
+    const char *error_message = NULL;
+
+    /* If have already seen end of input, return an empty string. */
+
+    if (self->seen_eos)
+        return 0;
+
+    /* If have already encountered an error, then raise a new error. */
+
+    if (self->seen_error) {
+        PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi request data read "
+                "error: Input is already in error state.");
+
+        return -1;
+    }
+
+    /*
+     * When reaading the request content we will be saying that we
+     * should block if there is no input data available at that
+     * point but not all data has been exhausted. We therefore need
+     * to ensure that we do not cause Python as a whole to block by
+     * releasing the GIL, but also must remember to reacquire the GIL
+     * when we exit.
+     */
+
+    Py_BEGIN_ALLOW_THREADS
+
+    /*
+     * Create the bucket brigade the first time it is required and
+     * save it against the input object. We need to make sure we
+     * perform a cleanup, but not destroy, the bucket brigade each
+     * time we exit this function.
+     */
+
+    if (!bb) {
+        bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+
+        if (bb == NULL) {
+            r->connection->keepalive = AP_CONN_CLOSE;
+            error_message = "Unable to create bucket brigade";
+            goto finally;
+        }
+
+        self->bb = bb;
+    }
+
+    /* Force the required amount of input to be read. */
+
+    rv = ap_get_brigade(r->input_filters, bb, AP_MODE_READBYTES,
+                        APR_BLOCK_READ, bufsiz);
+
+    if (rv != APR_SUCCESS) {
+        /*
+         * If we actually fail here, we want to just return and
+         * stop trying to read data from the client. The HTTP_IN
+         * input filter is a bit of a pain here as it can return
+         * EAGAIN in various strange situations where it isn't
+         * believed that it means to retry, but that it is still
+         * a permanent failure. This can include timeouts and
+         * errors in chunked encoding format. To avoid a message
+         * of 'Resource temporarily unavailable' which could be
+         * confusing, replace it with a generic message that the
+         * connection was terminated.
+         */
+
+        r->connection->keepalive = AP_CONN_CLOSE;
+
+        if (APR_STATUS_IS_EAGAIN(rv))
+            error_message = "Connection was terminated";
+        else
+            error_status = rv;
+
+        goto finally;
+    }
+
+    /*
+     * If this fails, it means that a filter is written incorrectly and
+     * that it needs to learn how to properly handle APR_BLOCK_READ
+     * requests by returning data when requested.
+     */
+
+    AP_DEBUG_ASSERT(!APR_BRIGADE_EMPTY(bb));
+
+    /*
+     * Check to see if EOS terminates the brigade. If so, we remember
+     * this to avoid any attempts to read more data in future calls.
+     */
+
+    if (APR_BUCKET_IS_EOS(APR_BRIGADE_LAST(bb)))
+        self->seen_eos = 1;
+
+    /* Now extract the actual data from the bucket brigade. */
+
+    rv = apr_brigade_flatten(bb, buffer, &bufsiz);
+
+    if (rv != APR_SUCCESS) {
+        error_status = rv;
+        goto finally;
+    }
+
+finally:
+    /*
+     * We must always cleanup up, not destroy, the brigade after
+     * each call.
+     */
+
+    if (bb)
+        apr_brigade_cleanup(bb);
+
+    /* Make sure we reacquire the GIL when all done. */
+
+    Py_END_ALLOW_THREADS
+
+    /*
+     * Set any Python exception when an error has occurred and
+     * remember there was an error so can flag on subsequent
+     * reads that already in an error state.
+     */
+
+    if (error_status) {
+        char status_buffer[512];
+
+        error_message = apr_psprintf(r->pool, "Apache/mod_wsgi request "
+                "data read error: %s.", apr_strerror(error_status,
+                status_buffer, sizeof(status_buffer)-1));
+
+        PyErr_SetString(PyExc_IOError, error_message);
+
+        self->seen_error = 1;
+
+        return -1;
+    }
+    else if (error_message) {
+        error_message = apr_psprintf(r->pool, "Apache/mod_wsgi request "
+                "data read error: %s.", error_message);
+
+        PyErr_SetString(PyExc_IOError, error_message);
+
+        self->seen_error = 1;
+
+        return -1;
+    }
+
+    /*
+     * Finally return the amount of data that was read. This will be
+     * zero if all data has been consumed.
+     */
+
+    return bufsiz;
 }
 
 static PyObject *Input_read(InputObject *self, PyObject *args)
@@ -882,14 +1209,17 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
     }
 #endif
 
+    if (self->seen_error) {
+        PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi request data read "
+                "error: Input is already in error state.");
+
+        return NULL;
+    }
+
     init = self->init;
 
-    if (!self->init) {
-        if (!ap_should_client_block(self->r))
-            self->done = 1;
-
+    if (!self->init)
         self->init = 1;
-    }
 
     /* No point continuing if no more data to be consumed. */
 
@@ -913,14 +1243,10 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
         if (!init) {
             char dummy[1];
 
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_get_client_block(self->r, dummy, 0);
-            Py_END_ALLOW_THREADS
+            n = Input_read_from_input(self, dummy, 0);
 
-            if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "request data read error");
+            if (n == -1)
                 return NULL;
-            }
         }
 
         return PyString_FromString("");
@@ -970,13 +1296,9 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
 
         if (length < size) {
             while (length != size) {
-                Py_BEGIN_ALLOW_THREADS
-                n = ap_get_client_block(self->r, buffer + length,
-                                        size - length);
-                Py_END_ALLOW_THREADS
+                n = Input_read_from_input(self, buffer+length, size-length);
 
                 if (n == -1) {
-                    PyErr_SetString(PyExc_IOError, "request data read error");
                     Py_DECREF(result);
                     return NULL;
                 }
@@ -1027,15 +1349,15 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
          * is not truncated.
          */
 
-        size = self->length;
+        if (self->buffer) {
+            size = self->length;
+            size = size + (size >> 2);
 
-        if (!self->r->read_chunked && self->r->remaining > 0)
-            size += self->r->remaining;
-
-        size = size + (size >> 2);
-
-        if (size < 256)
-            size = self->r->read_chunked ? 8192 : 256;
+            if (size < HUGE_STRING_LEN)
+                size = HUGE_STRING_LEN;
+        }
+        else
+            size = HUGE_STRING_LEN;
 
         /* Allocate string of the estimated size. */
 
@@ -1065,12 +1387,9 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
 
         /* Now make first attempt at reading remaining data. */
 
-        Py_BEGIN_ALLOW_THREADS
-        n = ap_get_client_block(self->r, buffer + length, size - length);
-        Py_END_ALLOW_THREADS
+        n = Input_read_from_input(self, buffer+length, size-length);
 
         if (n == -1) {
-            PyErr_SetString(PyExc_IOError, "request data read error");
             Py_DECREF(result);
             return NULL;
         }
@@ -1102,12 +1421,9 @@ static PyObject *Input_read(InputObject *self, PyObject *args)
 
             /* Now make succesive attempt at reading data. */
 
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_get_client_block(self->r, buffer + length, size - length);
-            Py_END_ALLOW_THREADS
+            n = Input_read_from_input(self, buffer+length, size-length);
 
             if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "request data read error");
                 Py_DECREF(result);
                 return NULL;
             }
@@ -1154,12 +1470,15 @@ static PyObject *Input_readline(InputObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "|l:readline", &size))
         return NULL;
 
-    if (!self->init) {
-        if (!ap_should_client_block(self->r))
-            self->done = 1;
+    if (self->seen_error) {
+        PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi request data read "
+                "error: Input is already in error state.");
 
-        self->init = 1;
+        return NULL;
     }
+
+    if (!self->init)
+        self->init = 1;
 
     /*
      * No point continuing if requested size is zero or if no
@@ -1224,12 +1543,9 @@ static PyObject *Input_readline(InputObject *self, PyObject *args)
             char *p = NULL;
             char *q = NULL;
 
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_get_client_block(self->r, buffer + length, size - length);
-            Py_END_ALLOW_THREADS
+            n = Input_read_from_input(self, buffer+length, size-length);
 
             if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "request data read error");
                 Py_DECREF(result);
                 return NULL;
             }
@@ -1360,12 +1676,9 @@ static PyObject *Input_readline(InputObject *self, PyObject *args)
             char *p = NULL;
             char *q = NULL;
 
-            Py_BEGIN_ALLOW_THREADS
-            n = ap_get_client_block(self->r, buffer + length, size - length);
-            Py_END_ALLOW_THREADS
+            n = Input_read_from_input(self, buffer+length, size-length);
 
             if (n == -1) {
-                PyErr_SetString(PyExc_IOError, "request data read error");
                 Py_DECREF(result);
                 return NULL;
             }
@@ -1932,7 +2245,8 @@ static int Adapter_output(AdapterObject *self, const char *data,
                               getpid());
             }
             else
-                PyErr_SetString(PyExc_IOError, "client connection closed");
+                PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi client "
+                                "connection closed.");
 
             return 0;
         }
@@ -1966,7 +2280,27 @@ static int Adapter_output(AdapterObject *self, const char *data,
         Py_END_ALLOW_THREADS
 
         if (rv != APR_SUCCESS) {
-            PyErr_SetString(PyExc_IOError, "failed to write data");
+            char status_buffer[512];
+            const char *error_message;
+
+            if (!exception_when_aborted) {
+                error_message = apr_psprintf(r->pool, "Failed to write "
+                        "response data: %s", apr_strerror(rv, status_buffer,
+                        sizeof(status_buffer)-1));
+
+                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, self->r,
+                              "mod_wsgi (pid=%d): %s.", getpid(),
+                              error_message);
+            }
+            else {
+                error_message = apr_psprintf(r->pool, "Apache/mod_wsgi "
+                        "failed to write response data: %s",
+                        apr_strerror(rv, status_buffer,
+                        sizeof(status_buffer)-1));
+
+                PyErr_SetString(PyExc_IOError, error_message);
+            }
+
             return 0;
         }
 
@@ -1993,7 +2327,8 @@ static int Adapter_output(AdapterObject *self, const char *data,
                           getpid());
         }
         else
-            PyErr_SetString(PyExc_IOError, "client connection closed");
+            PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi client "
+                            "connection closed.");
 
         return 0;
     }
@@ -2016,7 +2351,8 @@ static int Adapter_output_file(AdapterObject *self, apr_file_t* tmpfile,
     r = self->r;
 
     if (r->connection->aborted) {
-        PyErr_SetString(PyExc_IOError, "client connection closed");
+        PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi client "
+                        "connection closed.");
         return 0;
     }
 
@@ -2063,7 +2399,14 @@ static int Adapter_output_file(AdapterObject *self, apr_file_t* tmpfile,
     Py_END_ALLOW_THREADS
 
     if (rv != APR_SUCCESS) {
-        PyErr_SetString(PyExc_IOError, "failed to write data");
+        char status_buffer[512];
+        const char *error_message;
+
+        error_message = apr_psprintf(r->pool, "Apache/mod_wsgi failed "
+                "to write response data: %s.", apr_strerror(rv,
+                status_buffer, sizeof(status_buffer)-1));
+
+        PyErr_SetString(PyExc_IOError, error_message);
         return 0;
     }
 
@@ -2072,7 +2415,8 @@ static int Adapter_output_file(AdapterObject *self, apr_file_t* tmpfile,
     Py_END_ALLOW_THREADS
 
     if (r->connection->aborted) {
-        PyErr_SetString(PyExc_IOError, "client connection closed");
+        PyErr_SetString(PyExc_IOError, "Apache/mod_wsgi client connection "
+                        "closed.");
         return 0;
     }
 
@@ -2509,7 +2853,7 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
     if (wsgi_newrelic_config_file) {
         PyObject *module = NULL;
 
-        module = PyImport_ImportModule("newrelic.api.web_transaction");
+        module = PyImport_ImportModule("newrelic.agent");
 
         if (module) {
             PyObject *dict;
@@ -2523,6 +2867,12 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
 
                 wrapper = PyObject_CallFunctionObjArgs(
                         factory, object, Py_None, NULL);
+
+                if (!wrapper) {
+                    wsgi_log_python_error(self->r, self->log,
+                                          self->r->filename);
+                    PyErr_Clear();
+                }
 
                 Py_DECREF(factory);
             }
@@ -2622,6 +2972,16 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
                 self->result = OK;
 
             wsgi_log_python_error(self->r, self->log, self->r->filename);
+
+            /*
+             * If response content is being chunked and an error
+             * occurred, we need to prevent the sending of the EOS
+             * bucket so a client is able to detect that the the
+             * response was incomplete.
+             */
+
+            if (self->r->chunked)
+                self->r->eos_sent = 1;
         }
 
         if (PyObject_HasAttrString(self->sequence, "close")) {
@@ -2669,11 +3029,8 @@ static int Adapter_run(AdapterObject *self, PyObject *object)
 static PyObject *Adapter_write(AdapterObject *self, PyObject *args)
 {
     PyObject *item = NULL;
-    PyObject *latin_item = NULL;
     const char *data = NULL;
     long length = 0;
-
-    /* XXX The use of latin_item here looks very broken. */
 
     if (!self->r) {
         PyErr_SetString(PyExc_RuntimeError, "request object has expired");
@@ -2686,7 +3043,6 @@ static PyObject *Adapter_write(AdapterObject *self, PyObject *args)
     if (!PyString_Check(item)) {
         PyErr_Format(PyExc_TypeError, "byte string value expected, value "
                      "of type %.200s found", item->ob_type->tp_name);
-        Py_XDECREF(latin_item);
         return NULL;
     }
 
@@ -2694,11 +3050,8 @@ static PyObject *Adapter_write(AdapterObject *self, PyObject *args)
     length = PyString_Size(item);
 
     if (!Adapter_output(self, data, length, item, 1)) {
-        Py_XDECREF(latin_item);
         return NULL;
     }
-
-    Py_XDECREF(latin_item);
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -2863,8 +3216,6 @@ static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
     PyObject *co = NULL;
     struct _node *n = NULL;
 
-    PyObject *transaction = NULL;
-
 #if defined(WIN32) && defined(APR_HAS_UNICODE_FS)
     apr_wchar_t wfilename[APR_PATH_MAX];
 #endif
@@ -2970,85 +3321,6 @@ static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
         return NULL;
     }
 
-    if (wsgi_newrelic_config_file) {
-        PyObject *module = NULL;
-
-        PyObject *application = NULL;
-
-
-        module = PyImport_ImportModule("newrelic.api.application");
-
-        if (module) {
-            PyObject *dict = NULL;
-            PyObject *object = NULL;
-
-            dict = PyModule_GetDict(module);
-            object = PyDict_GetItemString(dict, "application");
-
-            Py_INCREF(object);
-            application = PyObject_CallFunctionObjArgs(object, NULL);
-            Py_DECREF(object);
-
-            Py_DECREF(module);
-            module = NULL;
-
-            if (!application)
-                PyErr_Clear();
-        }
-        else
-            PyErr_Clear();
-
-        if (application)
-            module = PyImport_ImportModule("newrelic.api.background_task");
-
-        if (module) {
-            PyObject *dict = NULL;
-            PyObject *object = NULL;
-
-            dict = PyModule_GetDict(module);
-            object = PyDict_GetItemString(dict, "BackgroundTask");
-
-            if (object) {
-                PyObject *args = NULL;
-
-                Py_INCREF(object);
-
-                args = Py_BuildValue("(Oss)", application, filename,
-                                     "Script/Import");
-                transaction = PyObject_Call(object, args, NULL);
-
-                if (!transaction)
-                    PyErr_WriteUnraisable(object);
-
-                Py_DECREF(args);
-                Py_DECREF(object);
-
-                if (transaction) {
-                    PyObject *result = NULL;
-
-                    object = PyObject_GetAttrString(
-                            transaction, "__enter__");
-                    args = PyTuple_Pack(0);
-                    result = PyObject_Call(object, args, NULL);
-
-                    if (!result)
-                        PyErr_WriteUnraisable(object);
-
-                    Py_XDECREF(result);
-                    Py_DECREF(object);
-                }
-            }
-
-            Py_DECREF(module);
-        }
-        else
-            PyErr_Print();
-
-        Py_XDECREF(application);
-    }
-    else
-        PyErr_Clear();
-
     co = (PyObject *)PyNode_Compile(n, filename);
     PyNode_Free(n);
 
@@ -3056,67 +3328,6 @@ static PyObject *wsgi_load_source(apr_pool_t *pool, request_rec *r,
         m = PyImport_ExecCodeModuleEx((char *)name, co, (char *)filename);
 
     Py_XDECREF(co);
-
-    if (wsgi_newrelic_config_file) {
-        if (transaction) {
-            PyObject *object;
-
-            object = PyObject_GetAttrString(transaction, "__exit__");
-
-            if (m) {
-                PyObject *args = NULL;
-                PyObject *result = NULL;
-
-                args = PyTuple_Pack(3, Py_None, Py_None, Py_None);
-                result = PyObject_Call(object, args, NULL);
-
-                if (!result)
-                    PyErr_WriteUnraisable(object);
-                else
-                    Py_DECREF(result);
-
-                Py_DECREF(args);
-            }
-            else {
-                PyObject *args = NULL;
-                PyObject *result = NULL;
-
-                PyObject *type = NULL;
-                PyObject *value = NULL;
-                PyObject *traceback = NULL;
-
-                PyErr_Fetch(&type, &value, &traceback);
-
-                if (!value) {
-                    value = Py_None;
-                    Py_INCREF(value);
-                }
-
-                if (!traceback) {
-                    traceback = Py_None;
-                    Py_INCREF(traceback);
-                }
-
-                PyErr_NormalizeException(&type, &value, &traceback);
-
-                args = PyTuple_Pack(3, type, value, traceback);
-                result = PyObject_Call(object, args, NULL);
-
-                if (!result)
-                    PyErr_WriteUnraisable(object);
-                else
-                    Py_DECREF(result);
-
-                Py_DECREF(args);
-
-                PyErr_Restore(type, value, traceback);
-            }
-
-            Py_DECREF(object);
-
-            Py_DECREF(transaction);
-        }
-    }
 
     if (m) {
         PyObject *object = NULL;
@@ -3524,7 +3735,8 @@ static int wsgi_execute_script(request_rec *r)
                  */
 
                 adapter->r = NULL;
-                adapter->input->r = NULL;
+
+                Input_finish(adapter->input);
 
                 /* Close the log object so data is flushed. */
 
@@ -3695,6 +3907,8 @@ static void wsgi_python_child_init(apr_pool_t *p)
     PyType_Ready(&Interpreter_Type);
     PyType_Ready(&Dispatch_Type);
     PyType_Ready(&Auth_Type);
+
+    PyType_Ready(&SignalIntercept_Type);
 
 #if PY_MAJOR_VERSION > 3 || (PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 4)
     PyType_Ready(&ShutdownInterpreter_Type);
@@ -4022,7 +4236,11 @@ static const char *wsgi_add_script_alias(cmd_parms *cmd, void *mconfig,
         object->application_group = application_group;
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
-        if (*object->process_group) {
+        if (*object->process_group &&
+            strcmp(object->process_group, "%{RESOURCE}") != 0 &&
+            strcmp(object->process_group, "%{SERVER}") != 0 &&
+            strcmp(object->process_group, "%{HOST}") != 0) {
+
             WSGIProcessGroup *group = NULL;
             WSGIProcessGroup *entries = NULL;
             WSGIProcessGroup *entry = NULL;
@@ -4794,6 +5012,143 @@ static const char *wsgi_set_map_head_to_get(cmd_parms *cmd, void *mconfig,
     return NULL;
 }
 
+static char *wsgi_http2env(apr_pool_t *a, const char *w);
+
+static const char *wsgi_set_trusted_proxy_headers(cmd_parms *cmd,
+                                                  void *mconfig,
+                                                  const char *args)
+{
+    apr_array_header_t *headers = NULL;
+
+    if (cmd->path) {
+        WSGIDirectoryConfig *dconfig = NULL;
+        dconfig = (WSGIDirectoryConfig *)mconfig;
+
+        if (!dconfig->trusted_proxy_headers) {
+            headers = apr_array_make(cmd->pool, 3, sizeof(char*));
+            dconfig->trusted_proxy_headers = headers;
+        }
+        else
+            headers = dconfig->trusted_proxy_headers;
+    }
+    else {
+        WSGIServerConfig *sconfig = NULL;
+        sconfig = ap_get_module_config(cmd->server->module_config,
+                                       &wsgi_module);
+
+        if (!sconfig->trusted_proxy_headers) {
+            headers = apr_array_make(cmd->pool, 3, sizeof(char*));
+            sconfig->trusted_proxy_headers = headers;
+        }
+        else
+            headers = sconfig->trusted_proxy_headers;
+    }
+
+    while (*args) {
+        const char **entry = NULL;
+
+        entry = (const char **)apr_array_push(headers);
+        *entry = wsgi_http2env(cmd->pool, ap_getword_conf(cmd->pool, &args));
+    }
+
+    return NULL;
+}
+
+static int wsgi_looks_like_ip(const char *ip) {
+    static const char ipv4_set[] = "0123456789./";
+    static const char ipv6_set[] = "0123456789abcdef:/";
+
+    const char *ptr;
+
+    /* Zero length value is not valid. */
+
+    if (!*ip)
+      return 0;
+
+    /* Determine if this could be a IPv6 or IPv4 address. */
+
+    ptr = ip;
+
+    if (strchr(ip, ':')) {
+        while(*ptr && strchr(ipv6_set, *ptr) != NULL)
+            ++ptr;
+    }
+    else {
+        while(*ptr && strchr(ipv4_set, *ptr) != NULL)
+            ++ptr;
+    }
+
+    return (*ptr == '\0');
+}
+
+static const char *wsgi_set_trusted_proxies(cmd_parms *cmd,
+                                              void *mconfig, const char *args)
+{
+    apr_array_header_t *proxy_ips = NULL;
+
+    if (cmd->path) {
+        WSGIDirectoryConfig *dconfig = NULL;
+        dconfig = (WSGIDirectoryConfig *)mconfig;
+
+        if (!dconfig->trusted_proxies) {
+            proxy_ips = apr_array_make(cmd->pool, 3, sizeof(char*));
+            dconfig->trusted_proxies = proxy_ips;
+        }
+        else
+            proxy_ips = dconfig->trusted_proxies;
+    }
+    else {
+        WSGIServerConfig *sconfig = NULL;
+        sconfig = ap_get_module_config(cmd->server->module_config,
+                                       &wsgi_module);
+
+        if (!sconfig->trusted_proxies) {
+            proxy_ips = apr_array_make(cmd->pool, 3, sizeof(char*));
+            sconfig->trusted_proxies = proxy_ips;
+        }
+        else
+            proxy_ips = sconfig->trusted_proxies;
+    }
+
+    while (*args) {
+        const char *proxy_ip;
+
+        proxy_ip = ap_getword_conf(cmd->pool, &args);
+
+        if (wsgi_looks_like_ip(proxy_ip)) {
+            char *ip;
+            char *mask;
+            apr_ipsubnet_t **sub;
+            apr_status_t rv;
+
+            ip = apr_pstrdup(cmd->temp_pool, proxy_ip);
+
+            if ((mask = ap_strchr(ip, '/')))
+                *mask++ = '\0';
+
+            sub = (apr_ipsubnet_t **)apr_array_push(proxy_ips);
+
+            rv = apr_ipsubnet_create(sub, ip, mask, cmd->pool);
+
+            if (rv != APR_SUCCESS) {
+                char msgbuf[128];
+                apr_strerror(rv, msgbuf, sizeof(msgbuf));
+
+                return apr_pstrcat(cmd->pool, "Unable to parse trusted "
+                                   "proxy IP address/subnet of \"", proxy_ip,
+                                   "\". ", msgbuf, NULL);
+            }
+        }
+        else {
+            return apr_pstrcat(cmd->pool, "Unable to parse trusted proxy "
+                               "IP address/subnet of \"", proxy_ip, "\".",
+                               NULL);
+        }
+    }
+
+    return NULL;
+}
+
 static const char *wsgi_set_enable_sendfile(cmd_parms *cmd, void *mconfig,
                                             const char *f)
 {
@@ -5246,19 +5601,8 @@ static int wsgi_hook_intercept(request_rec *r)
 
 /* Handler for the response handler phase. */
 
-static void wsgi_log_script_error(request_rec *r, const char *e, const char *n)
-{
-    char *message = NULL;
-
-    if (!n)
-        n = r->filename;
-
-    message = apr_psprintf(r->pool, "%s: %s", e, n);
-
-    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", message);
-}
-
 static void wsgi_drop_invalid_headers(request_rec *r);
+static void wsgi_process_proxy_headers(request_rec *r);
 
 static void wsgi_build_environment(request_rec *r)
 {
@@ -5276,20 +5620,21 @@ static void wsgi_build_environment(request_rec *r)
                                                        &wsgi_module);
 
     /*
-     * Populate environment with standard CGI variables. Before
-     * we do this though, we ensure that we delete any headers
-     * which use invalid characters. This is necessary to ensure
-     * that someone doesn't try and take advantage of header
-     * spoofing. This can come about where characters other than
-     * alphanumerics or '-' are used as the conversion of non
-     * alphanumerics to '_' means one can get collisions. This
-     * is technically only an issue with Apache 2.2 as Apache
-     * 2.4 addresses the problem and drops them anyway. Still go
-     * through and drop them even for Apache 2.4 as not sure
-     * which version of Apache 2.4 introduces the change.
+     * Remove any invalid headers which use invalid characters.
+     * This is necessary to ensure that someone doesn't try and
+     * take advantage of header spoofing. This can come about
+     * where characters other than alphanumerics or '-' are used
+     * as the conversion of non alphanumerics to '_' means one
+     * can get collisions. This is technically only an issue
+     * with Apache 2.2 as Apache 2.4 addresses the problem and
+     * drops them anyway. Still go through and drop them even
+     * for Apache 2.4 as not sure which version of Apache 2.4
+     * introduces the change.
      */
 
     wsgi_drop_invalid_headers(r);
+
+    /* Populate environment with standard CGI variables. */
 
     ap_add_cgi_vars(r);
     ap_add_common_vars(r);
@@ -5326,14 +5671,6 @@ static void wsgi_build_environment(request_rec *r)
         if (r->method_number == M_GET)
             apr_table_setn(r->subprocess_env, "REQUEST_METHOD", "GET");
     }
-
-    /* Determine whether connection uses HTTPS protocol. */
-
-    if (!wsgi_is_https)
-        wsgi_is_https = APR_RETRIEVE_OPTIONAL_FN(ssl_is_https);
-
-    if (wsgi_is_https && wsgi_is_https(r->connection))
-        apr_table_set(r->subprocess_env, "HTTPS", "1");
 
     /*
      * If enabled, pass along authorisation headers which Apache
@@ -5373,7 +5710,7 @@ static void wsgi_build_environment(request_rec *r)
 
     script_name = apr_table_get(r->subprocess_env, "SCRIPT_NAME");
 
-    if (*script_name) {
+    if (*script_name == '/') {
         while (*script_name && (*(script_name+1) == '/'))
             script_name++;
         script_name = apr_pstrdup(r->pool, script_name);
@@ -5383,13 +5720,41 @@ static void wsgi_build_environment(request_rec *r)
 
     path_info = apr_table_get(r->subprocess_env, "PATH_INFO");
 
-    if (*path_info) {
+    if (*path_info == '/') {
         while (*path_info && (*(path_info+1) == '/'))
             path_info++;
         path_info = apr_pstrdup(r->pool, path_info);
         ap_no2slash((char*)path_info);
         apr_table_setn(r->subprocess_env, "PATH_INFO", path_info);
     }
+
+    /*
+     * Save away the SCRIPT_NAME and PATH_INFO values at this point
+     * so we have a way of determining if they are rewritten somehow.
+     * This can be important when dealing with rewrite rules and
+     * a trusted header was being handled for SCRIPT_NAME.
+     */
+
+    apr_table_setn(r->subprocess_env, "mod_wsgi.script_name", script_name);
+    apr_table_setn(r->subprocess_env, "mod_wsgi.path_info", path_info);
+
+    /*
+     * Perform fixups on environment based on trusted proxy headers
+     * sent through from a front end proxy.
+     */
+
+    wsgi_process_proxy_headers(r);
+
+    /*
+     * Determine whether connection uses HTTPS protocol. This has
+     * to be done after and fixups due to trusted proxy headers.
+     */
+
+    if (!wsgi_is_https)
+        wsgi_is_https = APR_RETRIEVE_OPTIONAL_FN(ssl_is_https);
+
+    if (wsgi_is_https && wsgi_is_https(r->connection))
+        apr_table_set(r->subprocess_env, "HTTPS", "1");
 
     /*
      * Set values specific to mod_wsgi configuration. These control
@@ -5420,9 +5785,6 @@ static void wsgi_build_environment(request_rec *r)
     apr_table_setn(r->subprocess_env, "mod_wsgi.listener_port",
                    apr_psprintf(r->pool, "%d", c->local_addr->port));
 #endif
-
-    apr_table_setn(r->subprocess_env, "mod_wsgi.input_chunked",
-                   apr_psprintf(r->pool, "%d", !!r->read_chunked));
 
     apr_table_setn(r->subprocess_env, "mod_wsgi.enable_sendfile",
                    apr_psprintf(r->pool, "%d", config->enable_sendfile));
@@ -5636,7 +5998,7 @@ static PyObject *Dispatch_ssl_var_lookup(DispatchObject *self, PyObject *args)
 
     if (ssl_var_lookup == 0)
     {
-        Py_XINCREF(Py_None);
+        Py_INCREF(Py_None);
 
         return Py_None;
     }
@@ -5645,7 +6007,7 @@ static PyObject *Dispatch_ssl_var_lookup(DispatchObject *self, PyObject *args)
                            self->r->connection, self->r, name);
 
     if (!value) {
-        Py_XINCREF(Py_None);
+        Py_INCREF(Py_None);
 
         return Py_None;
     }
@@ -6143,6 +6505,9 @@ static int wsgi_hook_handler(request_rec *r)
 
     const char *value = NULL;
 
+    const char *tenc = NULL;
+    const char *lenp = NULL;
+
     /* Filter out the obvious case of no handler defined. */
 
     if (!r->handler)
@@ -6270,42 +6635,85 @@ static int wsgi_hook_handler(request_rec *r)
 #endif
 
     /*
-     * Setup policy to apply if request contains a body. Note
-     * that WSGI specification doesn't strictly allow for chunked
-     * request content as CONTENT_LENGTH required when reading
-     * input and application isn't meant to read more than what
-     * is defined by CONTENT_LENGTH. To allow chunked request
-     * content tell Apache to dechunk it. For application to use
-     * the content, it has to ignore WSGI specification and use
-     * read() with no arguments to read all available input, or
-     * call read() with specific block size until read() returns
-     * an empty string.
+     * Setup policy to apply if request contains a body. Note that the
+     * WSGI specification doesn't strictly allow for chunked request
+     * content as CONTENT_LENGTH is required when reading input and
+     * an application isn't meant to read more than what is defined by
+     * CONTENT_LENGTH. We still optionally allow chunked request content.
+     * For an application to use the content, it has to ignore the WSGI
+     * specification and use read() with no arguments to read all
+     * available input, or call read() with specific block size until
+     * read() returns an empty string.
      */
 
-    if (config->chunked_request)
-        status = ap_setup_client_block(r, REQUEST_CHUNKED_DECHUNK);
-    else
-        status = ap_setup_client_block(r, REQUEST_CHUNKED_ERROR);
+    tenc = apr_table_get(r->headers_in, "Transfer-Encoding");
 
-    if (status != OK)
-        return status;
+    if (tenc) {
+        /* Only chunked transfer encoding is supported. */
+
+        if (strcasecmp(tenc, "chunked")) {
+            wsgi_log_script_error(r, apr_psprintf(r->pool,
+                    "Unexpected value for Transfer-Encoding of '%s' "
+                    "supplied. Only 'chunked' supported.", tenc),
+                    r->filename);
+            return HTTP_NOT_IMPLEMENTED;
+        }
+
+        /* Only allow chunked requests when explicitly enabled. */
+
+        if (!config->chunked_request) {
+            wsgi_log_script_error(r, "Received request requiring chunked "
+                    "transfer encoding, but optional support for chunked "
+                    "transfer encoding has not been enabled.", r->filename);
+            return HTTP_LENGTH_REQUIRED;
+        }
+
+        /*
+         * When chunked transfer encoding is specified, there should
+         * not be any content length specified.
+         */
+
+        if (lenp) {
+            wsgi_log_script_error(r, "Unexpected Content-Length header "
+                    "supplied where Transfer-Encoding was specified "
+                    "as 'chunked'.", r->filename);
+            return HTTP_BAD_REQUEST;
+        }
+    }
 
     /*
-     * Check to see if request content is too large and end
-     * request here. We do this as otherwise it will not be done
-     * until first time input data is read in application.
-     * Problem is that underlying HTTP output filter will
-     * also generate a 413 response and the error raised from
-     * the application will be appended to that. The call to
-     * ap_discard_request_body() is hopefully enough to trigger
-     * sending of the 413 response by the HTTP filter.
+     * Check to see if the request content is too large if the
+     * Content-Length header is defined then end the request here. We do
+     * this as otherwise it will not be done until first time input data
+     * is read in by the application. Problem is that underlying HTTP
+     * output filter will also generate a 413 response and the error
+     * raised from the application will be appended to that. The call to
+     * ap_discard_request_body() is hopefully enough to trigger sending
+     * of the 413 response by the HTTP filter.
      */
 
-    limit = ap_get_limit_req_body(r);
+    lenp = apr_table_get(r->headers_in, "Content-Length");
 
-    if (limit && limit < r->remaining) {
-        ap_discard_request_body(r);
-        return OK;
+    if (lenp) {
+        char *endstr;
+        apr_off_t length;
+
+        if (wsgi_strtoff(&length, lenp, &endstr, 10)
+            || *endstr || length < 0) {
+
+            wsgi_log_script_error(r, apr_psprintf(r->pool,
+                    "Invalid Content-Length header value of '%s' was "
+                    "supplied.", lenp), r->filename);
+
+            return HTTP_BAD_REQUEST;
+        }
+
+        limit = ap_get_limit_req_body(r);
+
+        if (limit && limit < length) {
+            ap_discard_request_body(r);
+            return OK;
+        }
     }
 
     /* Build the sub process environment. */
@@ -6389,9 +6797,12 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     int inactivity_timeout = 0;
     int request_timeout = 0;
     int graceful_timeout = 0;
+    int eviction_timeout = 0;
     int connect_timeout = 15;
     int socket_timeout = 0;
     int queue_timeout = 0;
+
+    const char *socket_user = NULL;
 
     int listen_backlog = WSGI_LISTEN_BACKLOG;
 
@@ -6400,6 +6811,7 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     int send_buffer_size = 0;
     int recv_buffer_size = 0;
     int header_buffer_size = 0;
+    int response_buffer_size = 0;
 
     const char *script_user = NULL;
     const char *script_group = NULL;
@@ -6598,6 +7010,14 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
             if (graceful_timeout < 0)
                 return "Invalid graceful timeout for WSGI daemon process.";
         }
+        else if (!strcmp(option, "eviction-timeout")) {
+            if (!*value)
+                return "Invalid eviction timeout for WSGI daemon process.";
+
+            eviction_timeout = atoi(value);
+            if (eviction_timeout < 0)
+                return "Invalid eviction timeout for WSGI daemon process.";
+        }
         else if (!strcmp(option, "connect-timeout")) {
             if (!*value)
                 return "Invalid connect timeout for WSGI daemon process.";
@@ -6662,6 +7082,35 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
                 return "Header buffer size must be >= 8192 bytes, "
                        "or 0 for default.";
             }
+        }
+        else if (!strcmp(option, "response-buffer-size")) {
+            if (!*value)
+                return "Invalid response buffer size for WSGI daemon process.";
+
+            response_buffer_size = atoi(value);
+            if (response_buffer_size < 65536 && response_buffer_size != 0) {
+                return "Response buffer size must be >= 65536 bytes, "
+                       "or 0 for default.";
+            }
+        }
+        else if (!strcmp(option, "socket-user")) {
+            uid_t socket_uid;
+
+            if (!*value)
+                return "Invalid socket user for WSGI daemon process.";
+
+            socket_uid = ap_uname2id(value);
+
+            if (*value == '#') {
+                struct passwd *entry = NULL;
+
+                if ((entry = getpwuid(socket_uid)) == NULL)
+                    return "Couldn't determine user name from socket user.";
+
+                value = entry->pw_name;
+            }
+
+            socket_user = value;
         }
         else if (!strcmp(option, "script-user")) {
             uid_t script_uid;
@@ -6838,9 +7287,12 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     entry->inactivity_timeout = apr_time_from_sec(inactivity_timeout);
     entry->request_timeout = apr_time_from_sec(request_timeout);
     entry->graceful_timeout = apr_time_from_sec(graceful_timeout);
+    entry->eviction_timeout = apr_time_from_sec(eviction_timeout);
     entry->connect_timeout = apr_time_from_sec(connect_timeout);
     entry->socket_timeout = apr_time_from_sec(socket_timeout);
     entry->queue_timeout = apr_time_from_sec(queue_timeout);
+
+    entry->socket_user = apr_pstrdup(cmd->pool, socket_user);
 
     entry->listen_backlog = listen_backlog;
 
@@ -6849,6 +7301,7 @@ static const char *wsgi_add_daemon_process(cmd_parms *cmd, void *mconfig,
     entry->send_buffer_size = send_buffer_size;
     entry->recv_buffer_size = recv_buffer_size;
     entry->header_buffer_size = header_buffer_size;
+    entry->response_buffer_size = response_buffer_size;
 
     entry->script_user = script_user;
     entry->script_group = script_group;
@@ -6971,6 +7424,9 @@ static apr_file_t *wsgi_signal_pipe_out = NULL;
 static void wsgi_signal_handler(int signum)
 {
     apr_size_t nbytes = 1;
+
+    if (wsgi_daemon_pid != 0 && wsgi_daemon_pid != getpid())
+        exit(-1);
 
     if (signum == AP_SIG_GRACEFUL) {
         apr_file_write(wsgi_signal_pipe_out, "G", &nbytes);
@@ -7184,11 +7640,6 @@ static void wsgi_setup_daemon_name(WSGIDaemonProcess *daemon, apr_pool_t *p)
 
 static int wsgi_setup_access(WSGIDaemonProcess *daemon)
 {
-    /* Setup the umask for the effective user. */
-
-    if (daemon->group->umask != -1)
-        umask(daemon->group->umask);
-
     /* Change to chroot environment. */
 
     if (daemon->group->root) {
@@ -7201,7 +7652,85 @@ static int wsgi_setup_access(WSGIDaemonProcess *daemon)
         }
     }
 
-    /* Setup the working directory.*/
+    /* We don't need to switch user/group if not root. */
+
+    if (geteuid() == 0) {
+        /* Setup the daemon process real and effective group. */
+
+        if (setgid(daemon->group->gid) == -1) {
+            ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
+                         "mod_wsgi (pid=%d): Unable to set group id "
+                         "to gid=%u.", getpid(),
+                         (unsigned)daemon->group->gid);
+
+            return -1;
+        }
+        else {
+            if (daemon->group->groups) {
+                if (setgroups(daemon->group->groups_count,
+                              daemon->group->groups) == -1) {
+                    ap_log_error(APLOG_MARK, APLOG_ALERT, errno,
+                                 wsgi_server, "mod_wsgi (pid=%d): Unable "
+                                 "to set supplementary groups for uname=%s "
+                                 "of '%s'.", getpid(), daemon->group->user,
+                                 daemon->group->groups_list);
+
+                    return -1;
+                }
+            }
+            else if (initgroups(daemon->group->user,
+                     daemon->group->gid) == -1) {
+                ap_log_error(APLOG_MARK, APLOG_ALERT, errno,
+                             wsgi_server, "mod_wsgi (pid=%d): Unable "
+                             "to set groups for uname=%s and gid=%u.",
+                             getpid(), daemon->group->user,
+                             (unsigned)daemon->group->gid);
+
+                return -1;
+            }
+        }
+
+        /* Setup the daemon process real and effective user. */
+
+        if (setuid(daemon->group->uid) == -1) {
+            ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
+                         "mod_wsgi (pid=%d): Unable to change to uid=%ld.",
+                         getpid(), (long)daemon->group->uid);
+
+            /*
+             * On true UNIX systems this should always succeed at
+             * this point. With certain Linux kernel versions though
+             * we can get back EAGAIN where the target user had
+             * reached their process limit. In that case will be left
+             * running as wrong user. Just exit on all failures to be
+             * safe. Don't die immediately to avoid a fork bomb.
+             *
+             * We could just return -1 here and let the caller do the
+             * sleep() and exit() but this failure is critical enough
+             * that we still do it here so it is obvious that the issue
+             * is being addressed.
+             */
+
+            ap_log_error(APLOG_MARK, APLOG_ALERT, 0, wsgi_server,
+                         "mod_wsgi (pid=%d): Failure to configure the "
+                         "daemon process correctly and process left in "
+                         "unspecified state. Restarting daemon process "
+                         "after delay.", getpid());
+
+            sleep(20);
+
+            wsgi_exit_daemon_process(-1);
+
+            return -1;
+        }
+    }
+
+    /*
+     * Setup the working directory for the process. It is either set to
+     * what the 'home' option explicitly provides, or the home home
+     * directory of the user, where it has been set to be different to
+     * the user that Apache's own processes run as.
+     */
 
     if (daemon->group->home) {
         if (chdir(daemon->group->home) == -1) {
@@ -7212,7 +7741,7 @@ static int wsgi_setup_access(WSGIDaemonProcess *daemon)
             return -1;
         }
     }
-    else if (geteuid()) {
+    else if (geteuid() != ap_unixd_config.user_id) {
         struct passwd *pwent;
 
         pwent = getpwuid(geteuid());
@@ -7221,7 +7750,8 @@ static int wsgi_setup_access(WSGIDaemonProcess *daemon)
             if (chdir(pwent->pw_dir) == -1) {
                 ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
                              "mod_wsgi (pid=%d): Unable to change working "
-                             "directory to '%s'.", getpid(), pwent->pw_dir);
+                             "directory to home directory '%s' for uid=%ld.",
+                             getpid(), pwent->pw_dir, (long)geteuid());
 
             return -1;
             }
@@ -7234,98 +7764,11 @@ static int wsgi_setup_access(WSGIDaemonProcess *daemon)
             return -1;
         }
     }
-    else {
-        struct passwd *pwent;
 
-        pwent = getpwuid(daemon->group->uid);
+    /* Setup the umask for the effective user. */
 
-        if (pwent) {
-            if (chdir(pwent->pw_dir) == -1) {
-                ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
-                             "mod_wsgi (pid=%d): Unable to change working "
-                             "directory to '%s'.", getpid(), pwent->pw_dir);
-
-                return -1;
-            }
-        }
-        else {
-            ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
-                         "mod_wsgi (pid=%d): Unable to determine home "
-                         "directory for uid=%ld.", getpid(),
-                         (long)daemon->group->uid);
-
-            return -1;
-        }
-    }
-
-    /* Don't bother switch user/group if not root. */
-
-    if (geteuid())
-        return 0;
-
-    /* Setup the daemon process real and effective group. */
-
-    if (setgid(daemon->group->gid) == -1) {
-        ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
-                     "mod_wsgi (pid=%d): Unable to set group id to gid=%u.",
-                     getpid(), (unsigned)daemon->group->gid);
-
-        return -1;
-    }
-    else {
-        if (daemon->group->groups) {
-            if (setgroups(daemon->group->groups_count,
-                          daemon->group->groups) == -1) {
-                ap_log_error(APLOG_MARK, APLOG_ALERT, errno,
-                             wsgi_server, "mod_wsgi (pid=%d): Unable "
-                             "to set supplementary groups for uname=%s "
-                             "of '%s'.", getpid(), daemon->group->user,
-                             daemon->group->groups_list);
-
-                return -1;
-            }
-        }
-        else if (initgroups(daemon->group->user, daemon->group->gid) == -1) {
-            ap_log_error(APLOG_MARK, APLOG_ALERT, errno,
-                         wsgi_server, "mod_wsgi (pid=%d): Unable "
-                         "to set groups for uname=%s and gid=%u.", getpid(),
-                         daemon->group->user, (unsigned)daemon->group->gid);
-
-            return -1;
-        }
-    }
-
-    /* Setup the daemon process real and effective user. */
-
-    if (setuid(daemon->group->uid) == -1) {
-        ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
-                     "mod_wsgi (pid=%d): Unable to change to uid=%ld.",
-                     getpid(), (long)daemon->group->uid);
-
-        /*
-         * On true UNIX systems this should always succeed at
-         * this point. With certain Linux kernel versions though
-         * we can get back EAGAIN where the target user had
-         * reached their process limit. In that case will be left
-         * running as wrong user. Just exit on all failures to be
-         * safe. Don't die immediately to avoid a fork bomb.
-         *
-         * We could just return -1 here and let the caller do the
-         * sleep() and exit() but this failure is critical enough
-         * that we still do it here so it is obvious that the issue
-         * is being addressed.
-         */
-
-        ap_log_error(APLOG_MARK, APLOG_ALERT, 0, wsgi_server,
-                     "mod_wsgi (pid=%d): Failure to configure the "
-                     "daemon process correctly and process left in "
-                     "unspecified state. Restarting daemon process "
-                     "after delay.", getpid());
-
-        sleep(20);
-
-        wsgi_exit_daemon_process(-1);
-    }
+    if (daemon->group->umask != -1)
+        umask(daemon->group->umask);
 
     /*
      * Linux prevents generation of core dumps after setuid()
@@ -7335,6 +7778,7 @@ static int wsgi_setup_access(WSGIDaemonProcess *daemon)
 
 #if defined(HAVE_PRCTL) && defined(PR_SET_DUMPABLE)
     /* This applies to Linux 2.4 and later. */
+
     if (ap_coredumpdir_configured) {
         if (prctl(PR_SET_DUMPABLE, 1)) {
             ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
@@ -7444,14 +7888,19 @@ static int wsgi_setup_socket(WSGIProcessGroup *process)
 
     if (!geteuid()) {
 #if defined(MPM_ITK) || defined(ITK_MPM)
-        if (chown(process->socket_path, process->uid, -1) < 0) {
+        uid_t socket_uid = process->uid;
 #else
-        if (chown(process->socket_path, ap_unixd_config.user_id, -1) < 0) {
+        uid_t socket_uid = ap_unixd_config.user_id;
 #endif
+
+        if (process->socket_user)
+            socket_uid = ap_uname2id(process->socket_user);
+
+        if (chown(process->socket_path, socket_uid, -1) < 0) {
             ap_log_error(APLOG_MARK, APLOG_ALERT, errno, wsgi_server,
                          "mod_wsgi (pid=%d): Couldn't change owner of unix "
-                         "domain socket '%s'.", getpid(),
-                         process->socket_path);
+                         "domain socket '%s' to uid=%ld.", getpid(),
+                         process->socket_path, (long)socket_uid);
             return -1;
         }
     }
@@ -8053,6 +8502,9 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
         ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, wsgi_server,
                      "mod_wsgi (pid=%d): Graceful timeout is %d.",
                      getpid(), (int)(apr_time_sec(wsgi_graceful_timeout)));
+        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, wsgi_server,
+                     "mod_wsgi (pid=%d): Eviction timeout is %d.",
+                     getpid(), (int)(apr_time_sec(wsgi_eviction_timeout)));
     }
 
     while (1) {
@@ -8169,6 +8621,29 @@ static void *wsgi_monitor_thread(apr_thread_t *thd, void *data)
             else {
                 if (!period || (wsgi_graceful_timeout < period))
                     period = wsgi_graceful_timeout;
+            }
+        }
+
+        if (!restart && wsgi_eviction_timeout) {
+            if (graceful_time) {
+                if (graceful_time <= now) {
+                    ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
+                                 "mod_wsgi (pid=%d): Daemon process "
+                                 "graceful timer expired '%s'.", getpid(),
+                                 group->name);
+
+                    restart = 1;
+                }
+                else {
+                    if (!period || ((graceful_time - now) < period))
+                        period = graceful_time - now;
+                    else if (wsgi_eviction_timeout < period)
+                        period = wsgi_eviction_timeout;
+                }
+            }
+            else {
+                if (!period || (wsgi_eviction_timeout < period))
+                    period = wsgi_eviction_timeout;
             }
         }
 
@@ -8344,6 +8819,7 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
     wsgi_idle_timeout = daemon->group->inactivity_timeout;
     wsgi_request_timeout = daemon->group->request_timeout;
     wsgi_graceful_timeout = daemon->group->graceful_timeout;
+    wsgi_eviction_timeout = daemon->group->eviction_timeout;
 
     if (wsgi_deadlock_timeout || wsgi_idle_timeout) {
         rv = apr_thread_create(&reaper, thread_attr, wsgi_monitor_thread,
@@ -8516,17 +8992,20 @@ static void wsgi_daemon_main(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
                     apr_thread_mutex_lock(wsgi_monitor_lock);
                     wsgi_graceful_shutdown_time = apr_time_now();
-                    wsgi_graceful_shutdown_time += wsgi_graceful_timeout;
+                    if (wsgi_eviction_timeout)
+                        wsgi_graceful_shutdown_time += wsgi_eviction_timeout;
+                    else
+                        wsgi_graceful_shutdown_time += wsgi_graceful_timeout;
                     apr_thread_mutex_unlock(wsgi_monitor_lock);
 
                     ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
-                                 "mod_wsgi (pid=%d): Graceful shutdown "
+                                 "mod_wsgi (pid=%d): Process eviction "
                                  "requested, waiting for requests to complete "
                                  "'%s'.", getpid(), daemon->group->name);
                 }
                 else {
                     ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
-                                 "mod_wsgi (pid=%d): Graceful shutdown "
+                                 "mod_wsgi (pid=%d): Process eviction "
                                  "requested, triggering immediate shutdown "
                                  "'%s'.", getpid(), daemon->group->name);
 
@@ -8840,6 +9319,8 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
         wsgi_daemon_shutdown = 0;
 
+        wsgi_daemon_pid = getpid();
+
         apr_signal(SIGINT, wsgi_signal_handler);
         apr_signal(SIGTERM, wsgi_signal_handler);
 
@@ -8893,7 +9374,7 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
 
             if (result == -1) {
                 ap_log_error(APLOG_MARK, APLOG_CRIT, 0, wsgi_server,
-                             "mod_wsgi (pid=%d): Couldn't set memory time "
+                             "mod_wsgi (pid=%d): Couldn't set memory "
                              "limit of %ld for process '%s'.", getpid(),
                              (long)daemon->group->memory_limit,
                              daemon->group->name);
@@ -8923,7 +9404,7 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
             if (result == -1) {
                 ap_log_error(APLOG_MARK, APLOG_CRIT, 0, wsgi_server,
                              "mod_wsgi (pid=%d): Couldn't set virtual memory "
-                             "time limit of %ld for process '%s'.", getpid(),
+                             "limit of %ld for process '%s'.", getpid(),
                              (long)daemon->group->virtual_memory_limit,
                              daemon->group->name);
             }
@@ -8959,18 +9440,39 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
         /* Set lang/locale if specified for daemon process. */
 
         if (daemon->group->lang) {
-            char *envvar = apr_pstrcat(p, "LANG=", daemon->group->lang, NULL);
+            char *envvar;
+
             ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, wsgi_server,
-                         "mod_wsgi (pid=%d): Setting lang to %s.",
-                         getpid(), daemon->group->lang);
+                         "mod_wsgi (pid=%d): Setting lang to %s for "
+                         "daemon process group %s.", getpid(),
+                         daemon->group->lang, daemon->group->name);
+
+            envvar = apr_pstrcat(p, "LANG=", daemon->group->lang, NULL);
             putenv(envvar);
         }
 
         if (daemon->group->locale) {
+            char *envvar;
+            char *result;
+
             ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, wsgi_server,
-                         "mod_wsgi (pid=%d): Setting locale to %s.",
-                         getpid(), daemon->group->locale);
-            setlocale(LC_ALL, daemon->group->locale);
+                         "mod_wsgi (pid=%d): Setting locale to %s for "
+                         "daemon process group %s.", getpid(),
+                         daemon->group->locale, daemon->group->name);
+
+            envvar = apr_pstrcat(p, "LC_ALL=", daemon->group->locale, NULL);
+            putenv(envvar);
+
+            result = setlocale(LC_ALL, daemon->group->locale);
+
+            if (!result) {
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, wsgi_server,
+                             "mod_wsgi (pid=%d): Unsupported locale setting "
+                             "%s specified for daemon process group %s. "
+                             "Consider using 'C.UTF-8' as fallback setting.",
+                             getpid(), daemon->group->locale,
+                             daemon->group->name);
+            }
         }
 
         /*
@@ -9153,6 +9655,10 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
          */
 
         apr_os_sock_put(&daemon->listener, &daemon->group->listener_fd, p);
+
+        /* Time daemon process started waiting for requests. */
+
+        wsgi_restart_time = apr_time_now();
 
         /* Run the main routine for the daemon process. */
 
@@ -9484,7 +9990,16 @@ static int wsgi_connect_daemon(request_rec *r, WSGIDaemonSocket *daemon)
         rv = wsgi_socket_connect_un(daemon->socket, &addr);
 
         if (rv != APR_SUCCESS) {
-            if (APR_STATUS_IS_ECONNREFUSED(rv)) {
+            /*
+             * We need to check for both connection refused and
+             * connection unavailable as Linux systems when
+             * connecting to a UNIX listener socket in non
+             * blocking mode, where the listener backlog is full
+             * will return the error EAGAIN rather than returning
+             * ECONNREFUSED as is supposedly dictated by POSIX.
+             */
+
+            if (APR_STATUS_IS_ECONNREFUSED(rv) || APR_STATUS_IS_EAGAIN(rv)) {
                 if ((apr_time_now()-start_time) < daemon->connect_timeout) {
                     if (wsgi_server_config->verbose_debugging) {
                         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, rv, r,
@@ -9528,8 +10043,9 @@ static int wsgi_connect_daemon(request_rec *r, WSGIDaemonSocket *daemon)
             else {
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
                              "mod_wsgi (pid=%d): Unable to connect to "
-                             "WSGI daemon process '%s' on '%s'.",
-                             getpid(), daemon->name, daemon->socket_path);
+                             "WSGI daemon process '%s' on '%s' as user "
+                             "with uid=%ld.", getpid(), daemon->name,
+                             daemon->socket_path, (long)geteuid());
 
                 apr_socket_close(daemon->socket);
 
@@ -9558,52 +10074,101 @@ static apr_status_t wsgi_socket_send(apr_socket_t *sock, const char *buf,
         if (rv != APR_SUCCESS)
             return rv;
 
+        buf += len;
         buf_size -= len;
     }
 
     return APR_SUCCESS;
 }
 
-static apr_status_t wsgi_send_strings(apr_pool_t *p, apr_socket_t *sock,
-                                      const char **s)
+static apr_status_t wsgi_socket_sendv_limit(apr_socket_t *sock,
+        struct iovec *vec, int nvec)
 {
     apr_status_t rv;
+    apr_size_t written = 0;
+    apr_size_t to_write = 0;
+    int i, offset;
 
-    apr_size_t total = 0;
+    /* Calculate how much has to be sent. */
 
-    apr_size_t n;
-    apr_size_t i;
-    apr_size_t l;
-
-    char *buffer;
-    char *offset;
-
-    total += sizeof(n);
-
-    for (n = 0; s[n]; n++)
-        total += (strlen(s[n]) + 1);
-
-    buffer = apr_palloc(p, total + sizeof(total));
-    offset = buffer;
-
-    memcpy(offset, &total, sizeof(total));
-    offset += sizeof(total);
-
-    memcpy(offset, &n, sizeof(n));
-    offset += sizeof(n);
-
-    for (i = 0; i < n; i++) {
-        l = (strlen(s[i]) + 1);
-        memcpy(offset, s[i], l);
-        offset += l;
+    for (i = 0; i < nvec; i++) {
+        to_write += vec[i].iov_len;
     }
 
-    total += sizeof(total);
+    /* Loop until all data has been sent. */
 
-    if ((rv = wsgi_socket_send(sock, buffer, total)) != APR_SUCCESS)
-        return rv;
+    offset = 0;
+
+    while (to_write) {
+        apr_size_t n = 0;
+
+        rv = apr_socket_sendv(sock, vec+offset, nvec-offset, &n);
+
+        if (rv != APR_SUCCESS)
+            return rv;
+
+        if (n > 0) {
+            /* Bail out of all data has been sent. */
+
+            written += n;
+
+            if (written >= to_write)
+                break;
+
+            /*
+             * Not all data was sent, so ween need to try
+             * again with the remainder of the data. We
+             * first need to work out where to start from.
+             */
+
+            for (i = offset; i < nvec; ) {
+                if (n >= vec[i].iov_len) {
+                    offset++;
+                    n -= vec[i++].iov_len;
+                } else {
+                    vec[i].iov_len -= n;
+                    vec[i].iov_base = (char *) vec[i].iov_base + n;
+                    break;
+                }
+            }
+        }
+    }
 
     return APR_SUCCESS;
+}
+
+static apr_status_t wsgi_socket_sendv(apr_socket_t *sock, struct iovec *vec,
+                                      int nvec)
+{
+#if defined(_SC_IOV_MAX)
+    static size_t iov_max = 0;
+    
+    if (iov_max == 0)
+        iov_max = sysconf(_SC_IOV_MAX);
+#else
+    static size_t iov_max = APR_MAX_IOVEC_SIZE;
+#endif
+
+    if (nvec > iov_max) {
+        int offset = 0;
+
+        while (nvec > 0) {
+            apr_status_t rv;
+
+            rv = wsgi_socket_sendv_limit(sock, &vec[offset],
+                    (nvec < iov_max ? nvec : (int)iov_max));
+
+            if (rv != APR_SUCCESS)
+                return rv;
+
+            nvec -= iov_max;
+            offset += iov_max;
+        }
+
+        return APR_SUCCESS;
+    }
+    else
+        return wsgi_socket_sendv_limit(sock, vec, nvec);
 }
 
 static apr_status_t wsgi_send_request(request_rec *r,
@@ -9612,10 +10177,16 @@ static apr_status_t wsgi_send_request(request_rec *r,
 {
     int rv;
 
-    char **vars;
     const apr_array_header_t *env_arr;
     const apr_table_entry_t *elts;
-    int i, j;
+    int i;
+
+    struct iovec *vec;
+    struct iovec *vec_start;
+    struct iovec *vec_next;
+
+    apr_size_t total = 0;
+    apr_size_t count = 0;
 
     apr_table_setn(r->subprocess_env, "mod_wsgi.daemon_connects",
                    apr_psprintf(r->pool, "%d", config->daemon_connects));
@@ -9627,20 +10198,55 @@ static apr_status_t wsgi_send_request(request_rec *r,
     env_arr = apr_table_elts(r->subprocess_env);
     elts = (const apr_table_entry_t *)env_arr->elts;
 
-    vars = (char **)apr_palloc(r->pool,
-                               ((2*env_arr->nelts)+1)*sizeof(char *));
+    /*
+     * Sending total amount of data, followed by count of separate
+     * strings and then each null terminated string. The total is
+     * inclusive of the bytes used for the count of the strings.
+     */
 
-    for (i=0, j=0; i<env_arr->nelts; ++i) {
+    vec = (struct iovec *)apr_palloc(r->pool, (2+(2*env_arr->nelts))*
+                                     sizeof(struct iovec));
+
+    vec_start = &vec[2];
+    vec_next = vec_start;
+
+    for (i=0; i<env_arr->nelts; ++i) {
         if (!elts[i].key)
             continue;
 
-        vars[j++] = elts[i].key;
-        vars[j++] = elts[i].val ? elts[i].val : "";
+        vec_next->iov_base = (void*)elts[i].key;
+        vec_next->iov_len = strlen(elts[i].key) + 1;
+
+        total += vec_next->iov_len;
+
+        vec_next++;
+
+        if (elts[i].val) {
+            vec_next->iov_base = (void*)elts[i].val;
+            vec_next->iov_len = strlen(elts[i].val) + 1;
+        }
+        else
+        {
+            vec_next->iov_base = (void*)"";
+            vec_next->iov_len = 1;
+        }
+
+        total += vec_next->iov_len;
+
+        vec_next++;
     }
 
-    vars[j] = NULL;
+    count = vec_next - vec_start;
 
-    rv = wsgi_send_strings(r->pool, daemon->socket, (const char **)vars);
+    vec[1].iov_base = (void*)&count;
+    vec[1].iov_len = sizeof(count);
+
+    total += vec[1].iov_len;
+
+    vec[0].iov_base = (void*)&total;
+    vec[0].iov_len = sizeof(total);
+
+    rv = wsgi_socket_sendv(daemon->socket, vec, (int)(vec_next-vec));
 
     if (rv != APR_SUCCESS)
         return rv;
@@ -9722,7 +10328,7 @@ static int wsgi_scan_headers(request_rec *r, char *buffer, int buflen,
      */
 
     cookie_table = apr_table_make(r->pool, 2);
-    apr_table_do(wsgi_copy_header, cookie_table, r->err_headers_out,
+    apr_table_do(wsgi_copy_header, cookie_table, r->headers_out,
                  "Set-Cookie", NULL);
 
     authen_table = apr_table_make(r->pool, 2);
@@ -9802,18 +10408,18 @@ static int wsgi_scan_headers(request_rec *r, char *buffer, int buflen,
              * values combined for these.
              */
 
-            apr_table_overlap(r->err_headers_out, merge,
+            apr_table_overlap(r->headers_out, merge,
                               APR_OVERLAP_TABLES_MERGE);
 
             /*
-             * No add in the special headers which we can't merge
+             * Now add in the special headers which we can't merge
              * because it gives certain browsers problems.
              */
 
             if (!apr_is_empty_table(cookie_table)) {
-                apr_table_unset(r->err_headers_out, "Set-Cookie");
-                r->err_headers_out = apr_table_overlay(r->pool,
-                    r->err_headers_out, cookie_table);
+                apr_table_unset(r->headers_out, "Set-Cookie");
+                r->headers_out = apr_table_overlay(r->pool,
+                    r->headers_out, cookie_table);
             }
 
             if (!apr_is_empty_table(authen_table)) {
@@ -9971,6 +10577,200 @@ static int wsgi_scan_headers_brigade(request_rec *r,
     return wsgi_scan_headers(r, buffer, buflen, wsgi_getsfunc_brigade, bb);
 }
 
+static int wsgi_transfer_response(request_rec *r, apr_bucket_brigade *bb,
+                                  apr_size_t buffer_size)
+{
+    apr_bucket *e;
+    apr_read_type_e mode = APR_NONBLOCK_READ;
+
+    apr_bucket_brigade *tmpbb;
+
+    const char *data = NULL;
+    apr_size_t length = 0;
+
+    apr_size_t bytes_transfered = 0;
+
+    int bucket_count = 0;
+
+    if (buffer_size == 0)
+        buffer_size = 65536;
+
+    /*
+     * Transfer any response content. We want to avoid the
+     * problem where the core output filter has no flow control
+     * to deal with slow HTTP clients and can actually buffer up
+     * excessive amounts of response content in memory. A fix
+     * for this was only introduced in Apache 2.3.3, with
+     * possible further tweaks in Apache 2.4.1. To avoid issue of
+     * what version it was implemented in, just employ a
+     * strategy of forcing a flush every time we pass through
+     * more than a certain amount of data.
+     */
+
+    tmpbb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+
+    while ((e = APR_BRIGADE_FIRST(bb)) != APR_BRIGADE_SENTINEL(bb)) {
+        apr_status_t rv;
+
+        /* If we have reached end of stream, we need to pass it on */
+
+        if (APR_BUCKET_IS_EOS(e)) {
+            /*
+             * Probably do not need to force a flush as EOS should
+             * do that, but do it just in case when we potentially
+             * have pending data to be written out.
+             */
+
+            if (bytes_transfered != 0) {
+                APR_BRIGADE_INSERT_TAIL(tmpbb, apr_bucket_flush_create(
+                                        r->connection->bucket_alloc));
+            }
+
+            APR_BRIGADE_INSERT_TAIL(tmpbb, apr_bucket_eos_create(
+                                    r->connection->bucket_alloc));
+
+            rv = ap_pass_brigade(r->output_filters, tmpbb);
+
+            apr_brigade_cleanup(tmpbb);
+
+            if (rv != APR_SUCCESS) {
+                apr_brigade_destroy(bb);
+
+                return HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            break;
+        }
+
+        /*
+         * Force the reading in of next block of data to be
+         * transfered if necessary. If the bucket is a heap
+         * bucket, then it will be whatever data is in it. If it
+         * is a socket bucket, this will result in the bucket
+         * being converted to a heap bucket with some amount of
+         * data and the socket bucket added back in after it. Any
+         * non data buckets should be skipped and discarded. The
+         * result should always be that the first bucket is a
+         * heap bucket.
+         */
+
+        rv = apr_bucket_read(e, &data, &length, mode);
+
+        /*
+         * If we would have blocked if not in non blocking mode
+         * we send a flush bucket to ensure that all buffered
+         * data is sent out before we block waiting for more.
+         */
+
+        if (rv == APR_EAGAIN && mode == APR_NONBLOCK_READ) {
+            APR_BRIGADE_INSERT_TAIL(tmpbb, apr_bucket_flush_create(
+                                    r->connection->bucket_alloc));
+
+            rv = ap_pass_brigade(r->output_filters, tmpbb);
+
+            apr_brigade_cleanup(tmpbb);
+
+            if (rv != APR_SUCCESS) {
+                apr_brigade_destroy(bb);
+
+                return HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            bytes_transfered = 0;
+
+            bucket_count = 0;
+
+            /*
+             * Retry read from daemon using a blocking read. We do
+             * not delete the bucket as we want to operate on the
+             * same one as we would have blocked.
+             */
+
+            mode = APR_BLOCK_READ;
+
+            continue;
+
+        } else if (rv != APR_SUCCESS) {
+            apr_brigade_destroy(bb);
+
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        /*
+         * We had some data to transfer. Next time round we need to
+         * always be try a non-blocking read first.
+         */
+
+        mode = APR_NONBLOCK_READ;
+
+        /*
+         * Now we don't actually work with the data which was
+         * read direct and instead simply remove what should be a
+         * heap bucket from the start of the bucket brigade and
+         * then place in a new bucket brigade to be pushed out to
+         * the client. By passing down the bucket, it avoids the
+         * need to create a transient bucket holding a reference
+         * to the data from the first bucket.
+         */
+
+        APR_BUCKET_REMOVE(e);
+        APR_BRIGADE_INSERT_TAIL(tmpbb, e);
+
+        /*
+         * If we have reached the buffer size threshold, we want
+         * to flush the data so that we aren't buffering too much
+         * in memory and blowing out memory size. We also have a
+         * check on the number of buckets we have accumulated as
+         * a large number of buckets with very small amounts of
+         * data will also accumulate a lot of memory. Apache's
+         * own flow control doesn't cope with such a situation.
+         * Right now hard wire the max number of buckets at 16
+         * which equates to worst case number of separate data
+         * blocks can be written by a writev() call on systems
+         * such as Solaris.
+         */
+
+        bytes_transfered += length;
+
+        bucket_count += 1;
+
+        if (bytes_transfered > buffer_size || bucket_count >= 16) {
+            APR_BRIGADE_INSERT_TAIL(tmpbb, apr_bucket_flush_create(
+                                    r->connection->bucket_alloc));
+
+            bytes_transfered = 0;
+
+            bucket_count = 0;
+
+            /*
+             * Since we flushed the data out to the client, it is
+             * okay to go back and do a blocking read the next time.
+             */
+
+            mode = APR_BLOCK_READ;
+        }
+
+        /* Pass the heap bucket and any flush bucket on. */
+
+        rv = ap_pass_brigade(r->output_filters, tmpbb);
+
+        apr_brigade_cleanup(tmpbb);
+
+        if (rv != APR_SUCCESS) {
+            apr_brigade_destroy(bb);
+
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    apr_brigade_destroy(bb);
+
+    return OK;
+}
+
+#define ASCII_CRLF  "\015\012"
+#define ASCII_ZERO  "\060"
+
 static int wsgi_execute_remote(request_rec *r)
 {
     WSGIRequestConfig *config = NULL;
@@ -10009,7 +10809,8 @@ static int wsgi_execute_remote(request_rec *r)
                            config->process_group)) {
             wsgi_log_script_error(r, apr_psprintf(r->pool, "Daemon "
                                   "process called '%s' cannot be "
-                                  "accessed by this WSGI application",
+                                  "accessed by this WSGI application "
+                                  "as not a member of allowed groups",
                                   config->process_group), r->filename);
 
             return HTTP_INTERNAL_SERVER_ERROR;
@@ -10454,7 +11255,16 @@ static int wsgi_execute_remote(request_rec *r)
 
     r->status = HTTP_OK;
 
-    /* Transfer any request content which was provided. */
+    /*
+     * Transfer any request content which was provided. Note that we
+     * actually frame each data block sent with same format as is used
+     * for chunked transfer encoding. This will be decoded in the
+     * daemon process. This is done so that the EOS can be properly
+     * identified by the daemon process in the absence of a value for
+     * CONTENT_LENGTH that can be relied on. The CONTENT_LENGTH is
+     * dodgy when have mutating input filters and none will be present
+     * at all if chunked request content was used.
+     */
 
     seen_eos = 0;
     child_stopped_reading = 0;
@@ -10468,9 +11278,20 @@ static int wsgi_execute_remote(request_rec *r)
                             APR_BLOCK_READ, HUGE_STRING_LEN);
 
         if (rv != APR_SUCCESS) {
-            ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-                         "mod_wsgi (pid=%d): Unable to get bucket brigade "
-                         "for request.", getpid());
+            char status_buffer[512];
+            const char *error_message;
+
+            error_message = apr_psprintf(r->pool, "Request data read "
+                    "error when proxying data to daemon process: %s",
+                    apr_strerror(rv, status_buffer, sizeof(
+                    status_buffer)-1));
+
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                         "mod_wsgi (pid=%d): %s.", getpid(), error_message);
+
+            if (APR_STATUS_IS_TIMEUP(rv))
+                return HTTP_REQUEST_TIME_OUT;
+
             return HTTP_INTERNAL_SERVER_ERROR;
         }
 
@@ -10481,34 +11302,101 @@ static int wsgi_execute_remote(request_rec *r)
             const char *data;
             apr_size_t len;
 
+            char chunk_hdr[20];
+            apr_size_t hdr_len;
+
+            struct iovec vec[3];
+
             if (APR_BUCKET_IS_EOS(bucket)) {
+                /* Send closing frame for chunked content. */
+
+                rv = wsgi_socket_send(daemon->socket,
+                        ASCII_ZERO ASCII_CRLF ASCII_CRLF, 5);
+
+                if (rv != APR_SUCCESS) {
+                    char status_buffer[512];
+                    const char *error_message;
+
+                    error_message = apr_psprintf(r->pool, "Request data write "
+                            "error when proxying data to daemon process: %s",
+                            apr_strerror(rv, status_buffer, sizeof(
+                            status_buffer)-1));
+
+                    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                                 "mod_wsgi (pid=%d): %s.", getpid(),
+                                 error_message);
+                }
+
                 seen_eos = 1;
                 break;
             }
 
             /* We can't do much with this. */
+
             if (APR_BUCKET_IS_FLUSH(bucket)) {
                 continue;
             }
 
             /* If the child stopped, we still must read to EOS. */
+
             if (child_stopped_reading) {
                 continue;
             }
 
             /* Read block. */
-            apr_bucket_read(bucket, &data, &len, APR_BLOCK_READ);
+
+            rv = apr_bucket_read(bucket, &data, &len, APR_BLOCK_READ);
+
+            if (rv != APR_SUCCESS) {
+                char status_buffer[512];
+                const char *error_message;
+
+                error_message = apr_psprintf(r->pool, "Request data read "
+                        "error when proxying data to daemon process: %s",
+                        apr_strerror(rv, status_buffer, sizeof(
+                        status_buffer)-1));
+
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                             "mod_wsgi (pid=%d): %s.", getpid(),
+                             error_message);
+
+                break;
+            }
 
             /*
              * Keep writing data to the child until done or too
              * much time elapses with no progress or an error
-             * occurs.
+             * occurs. Frame the data being sent with format used
+             * for chunked transfer encoding.
              */
 
-            rv = wsgi_socket_send(daemon->socket, data, len);
+            hdr_len = apr_snprintf(chunk_hdr, sizeof(chunk_hdr),
+                    "%" APR_UINT64_T_HEX_FMT ASCII_CRLF, (apr_uint64_t)len);
+
+            vec[0].iov_base = (void *)chunk_hdr;
+            vec[0].iov_len = hdr_len;
+            vec[1].iov_base = (void *)data;
+            vec[1].iov_len = len;
+            vec[2].iov_base = (void *)ASCII_CRLF;
+            vec[2].iov_len = 2;
+
+            rv = wsgi_socket_sendv(daemon->socket, vec, 3);
 
             if (rv != APR_SUCCESS) {
+                char status_buffer[512];
+                const char *error_message;
+
+                error_message = apr_psprintf(r->pool, "Request data write "
+                        "error when proxying data to daemon process: %s",
+                        apr_strerror(rv, status_buffer, sizeof(
+                        status_buffer)-1));
+
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                             "mod_wsgi (pid=%d): %s.", getpid(),
+                             error_message);
+
                 /* Daemon stopped reading, discard remainder. */
+
                 child_stopped_reading = 1;
             }
         }
@@ -10614,9 +11502,7 @@ static int wsgi_execute_remote(request_rec *r)
 
     /* Transfer any response content. */
 
-    ap_pass_brigade(r->output_filters, bbin);
-
-    return OK;
+    return wsgi_transfer_response(r, bbin, group->response_buffer_size);
 }
 
 static apr_status_t wsgi_socket_read(apr_socket_t *sock, void *vbuf,
@@ -10786,6 +11672,27 @@ static apr_status_t wsgi_header_filter(ap_filter_t *f, apr_bucket_brigade *b)
     return ap_pass_brigade(f->next, b);
 }
 
+typedef struct cve_2013_5704_fields cve_2013_5704_fields;
+typedef struct cve_2013_5704_apache22 cve_2013_5704_apache22;
+typedef struct cve_2013_5704_apache24 cve_2013_5704_apache24;
+
+struct cve_2013_5704_fields {
+    apr_table_t *trailers_in;
+    apr_table_t *trailers_out;
+};
+
+struct cve_2013_5704_apache22 {
+    struct ap_filter_t *proto_input_filters;
+    int eos_sent;
+    cve_2013_5704_fields fields;
+};
+
+struct cve_2013_5704_apache24 {
+    apr_sockaddr_t *useragent_addr;
+    char *useragent_ip;
+    cve_2013_5704_fields fields;
+};
+
 static int wsgi_hook_daemon_handler(conn_rec *c)
 {
     apr_socket_t *csd;
@@ -10814,6 +11721,13 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     const char *item;
 
     int queue_timeout_occurred = 0;
+
+#if ! (AP_MODULE_MAGIC_AT_LEAST(20120211, 37) || \
+    (AP_SERVER_MAJORVERSION_NUMBER == 2 && \
+     AP_SERVER_MINORVERSION_NUMBER <= 2 && \
+     AP_MODULE_MAGIC_AT_LEAST(20051115, 36)))
+    apr_size_t size = 0;
+#endif
 
     /* Don't do anything if not in daemon process. */
 
@@ -10868,10 +11782,22 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
             next = current->next;
     }
 
-    /* Create and populate our own request object. */
+    /*
+     * Create and populate our own request object. We allocate more
+     * memory than we require here for the request_rec in order to
+     * implement an opimistic hack for the case where mod_wsgi is built
+     * against an Apache version prior to CVE-2013-6704 being applied to
+     * it. If that Apache is upgraded but mod_wsgi not recompiled then
+     * it will crash in daemon mode. We therefore use the extra space to
+     * set the structure members which are added by CVE-2013-6704 to try
+     * and avoid that situation. Note that this is distinct from the
+     * hack down below to deal with where mod_wsgi was compiled against
+     * an Apache version which had CVE-2013-6704 backported.
+     */
 
     apr_pool_create(&p, c->pool);
-    r = apr_pcalloc(p, sizeof(request_rec));
+
+    r = apr_pcalloc(p, sizeof(request_rec)+sizeof(cve_2013_5704_fields));
 
     r->pool = p;
     r->connection = c;
@@ -10894,6 +11820,78 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     r->output_filters = r->proto_output_filters;
     r->proto_input_filters = c->input_filters;
     r->input_filters = r->proto_input_filters;
+
+#if AP_MODULE_MAGIC_AT_LEAST(20120211, 37) || \
+    (AP_SERVER_MAJORVERSION_NUMBER == 2 && \
+     AP_SERVER_MINORVERSION_NUMBER <= 2 && \
+     AP_MODULE_MAGIC_AT_LEAST(20051115, 36))
+
+    /*
+     * New request_rec fields were added to Apache because of changes
+     * related to CVE-2013-5704. The change means that mod_wsgi version
+     * 4.4.0-4.4.5 will crash if run on the Apache versions with the
+     * addition fields if mod_wsgi daemon mode is used. If we are using
+     * Apache 2.2.29 or 2.4.11, we set the fields direct against the
+     * new structure members.
+     */
+
+    r->trailers_in = apr_table_make(r->pool, 5);
+    r->trailers_out = apr_table_make(r->pool, 5);
+#else
+    /*
+     * We use a huge hack here to try and identify when CVE-2013-5704
+     * has been back ported to older Apache version. This is necessary
+     * as when backported the Apache module magic number will not be
+     * updated and it isn't possible to determine from that at compile
+     * time if the new structure members exist and so that they should
+     * be set. We therefore try and work out whether the extra structure
+     * members exist through looking at the size of request_rec and
+     * whether memory has been allocated above what is known to be the
+     * last member in the structure before the new members were added.
+     */
+
+#if AP_SERVER_MINORVERSION_NUMBER <= 2
+    size = offsetof(request_rec, eos_sent);
+    size += sizeof(r->eos_sent);
+#else
+    size = offsetof(request_rec, useragent_ip);
+    size += sizeof(r->useragent_ip);
+#endif
+
+    /*
+     * Check whether request_rec is at least as large as minimal size
+     * plus the size of the extra fields. If it is, then we need to
+     * set the additional fields.
+     */
+
+    if (sizeof(request_rec) >= size + sizeof(cve_2013_5704_fields)) {
+#if AP_SERVER_MINORVERSION_NUMBER <= 2
+        cve_2013_5704_apache22 *rext;
+        rext = (cve_2013_5704_apache22 *)&r->proto_input_filters;
+#else
+        cve_2013_5704_apache24 *rext;
+        rext = (cve_2013_5704_apache24 *)&r->useragent_addr;
+#endif
+
+        rext->fields.trailers_in = apr_table_make(r->pool, 5);
+        rext->fields.trailers_out = apr_table_make(r->pool, 5);
+    }
+    else {
+        /*
+         * Finally, to allow forward portability of a compiled mod_wsgi
+         * binary from an Apache version without the CVE-2013-5704
+         * change to one where it is, without needing to recompile
+         * mod_wsgi, we set fields in the extra memory we added before
+         * the actual request_rec.
+         */
+
+        cve_2013_5704_fields *rext;
+        rext = (cve_2013_5704_fields *)(r+1);
+
+        rext->trailers_in = apr_table_make(r->pool, 5);
+        rext->trailers_out = apr_table_make(r->pool, 5);
+    }
+#endif
 
     r->per_dir_config  = r->server->lookup_defaults;
 
@@ -11146,10 +12144,6 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     if (item)
         apr_table_setn(r->headers_in, "Content-Length", item);
 
-    /* Install the standard HTTP input filter. */
-
-    ap_add_input_filter("HTTP_IN", NULL, r, r->connection);
-
     /* Set details of WSGI specific request config. */
 
     config->process_group = apr_table_get(r->subprocess_env,
@@ -11173,40 +12167,21 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
         config->enable_sendfile = 0;
 
     /*
-     * Define how input data is to be processed. This
-     * was already done in the Apache child process and
-     * so it shouldn't fail. More importantly, it sets
-     * up request data tracking how much input has been
-     * read or if more remains.
+     * Install the standard HTTP input filter and set header for
+     * chunked transfer encoding to force it to dechunk the input.
+     * This is necessary as we chunk the data that is proxied to
+     * the daemon processes so that we can determining whether we
+     * actually receive all input or it was truncated.
+     *
+     * Note that the subprocess_env table that gets passed to the
+     * WSGI environ dictionary has already been populated, so the
+     * Transfer-Encoding header will not be passed in the WSGI
+     * environ dictionary as a result of this.
      */
 
-    ap_setup_client_block(r, REQUEST_CHUNKED_ERROR);
+    apr_table_setn(r->headers_in, "Transfer-Encoding", "chunked");
 
-    /*
-     * Where original request used chunked transfer
-     * encoding, we have to do a further fiddle here and
-     * make Apache think that request content length is
-     * maximum length possible. This is to satisfy the
-     * HTTP_IN input filter. Also flag request as being
-     * chunked so WSGI input function doesn't think that
-     * there may actually be that amount of data
-     * remaining.
-     */
-
-    item = apr_table_get(r->subprocess_env, "mod_wsgi.input_chunked");
-
-    if (item && !strcasecmp(item, "1")) {
-        if (sizeof(apr_off_t) == sizeof(long)) {
-            apr_table_setn(r->headers_in, "Content-Length",
-                           apr_psprintf(r->pool, "%ld", LONG_MAX));
-        }
-        else {
-            apr_table_setn(r->headers_in, "Content-Length",
-                           apr_psprintf(r->pool, "%d", INT_MAX));
-        }
-
-        r->read_chunked = 1;
-    }
+    ap_add_input_filter("HTTP_IN", NULL, r, r->connection);
 
     /* Check for queue timeout. */
 
@@ -11313,7 +12288,7 @@ static int wsgi_hook_init(apr_pool_t *pconf, apr_pool_t *ptemp,
     if (data) {
         ap_log_error(APLOG_MARK, APLOG_CRIT, 0, NULL,
                      "mod_wsgi (pid=%d): The mod_python module can "
-                     "not be used on conjunction with mod_wsgi 4.0+. "
+                     "not be used in conjunction with mod_wsgi 4.0+. "
                      "Remove the mod_python module from the Apache "
                      "configuration.", getpid());
 
@@ -11464,6 +12439,10 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
     }
 #endif
 
+    /* Remember worker process ID. */
+
+    wsgi_worker_pid = getpid();
+
     /* Create lock for request monitoring. */
 
     apr_thread_mutex_create(&wsgi_monitor_lock,
@@ -11487,6 +12466,10 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
 
         wsgi_python_child_init(p);
     }
+
+    /* Time child process started waiting for requests. */
+
+    wsgi_restart_time = apr_time_now();
 }
 
 #include "apr_lib.h"
@@ -11577,6 +12560,510 @@ static void wsgi_drop_invalid_headers(request_rec *r)
             key = ((char **)to_delete->elts)[i];
 
             apr_table_unset(r->headers_in, key);
+        }
+    }
+}
+
+static const char *wsgi_proxy_client_headers[] = {
+    "HTTP_X_FORWARDED_FOR",
+    "HTTP_X_CLIENT_IP",
+    "HTTP_X_REAL_IP",
+    NULL,
+};
+
+static const char *wsgi_proxy_scheme_headers[] = {
+    "HTTP_X_FORWARDED_HTTPS",
+    "HTTP_X_FORWARDED_PROTO",
+    "HTTP_X_FORWARDED_SCHEME",
+    "HTTP_X_FORWARDED_SSL",
+    "HTTP_X_HTTPS",
+    "HTTP_X_SCHEME",
+    NULL,
+};
+
+static const char *wsgi_proxy_host_headers[] = {
+    "HTTP_X_FORWARDED_HOST",
+    "HTTP_X_HOST",
+    NULL,
+};
+
+static const char *wsgi_proxy_script_name_headers[] = {
+    "HTTP_X_SCRIPT_NAME",
+    "HTTP_X_FORWARDED_SCRIPT_NAME",
+    NULL,
+};
+
+static int wsgi_ip_is_in_array(apr_sockaddr_t *client_ip,
+                               apr_array_header_t *proxy_ips) {
+    int i;
+    apr_ipsubnet_t **subs = (apr_ipsubnet_t **)proxy_ips->elts;
+
+    for (i = 0; i < proxy_ips->nelts; i++) {
+        if (apr_ipsubnet_test(subs[i], client_ip)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void wsgi_process_forwarded_for(request_rec *r,
+                                       WSGIRequestConfig *config,
+                                       const char *value
+)
+{
+    if (config->trusted_proxies) {
+        /*
+         * A potentially comma separated list where client we are
+         * interested in will be that immediately before the last
+         * trusted proxy working from the end forwards. If there
+         * are no trusted proxies then we use the last.
+         */
+
+        apr_array_header_t *arr;
+
+        arr = apr_array_make(r->pool, 3, sizeof(char *));
+
+        while (*value != '\0') {
+            /* Skip leading whitespace for item. */
+
+            while (*value != '\0' && apr_isspace(*value))
+                value++;
+
+            if (*value != '\0') {
+                const char *end = NULL;
+                const char *next = NULL;
+
+                char **entry = NULL;
+
+                end = value;
+
+                while (*end != '\0' && *end != ',')
+                    end++;
+
+                if (*end == '\0')
+                    next = end;
+                else if (*end == ',')
+                    next = end+1;
+
+                /* Need deal with trailing whitespace. */
+
+                while (end != value) {
+                    if (!apr_isspace(*(end-1)))
+                        break;
+
+                    end--;
+                }
+
+                entry = (char **)apr_array_push(arr);
+                *entry = apr_pstrndup(r->pool, value, (end-value));
+
+                value = next;
+            }
+        }
+
+        if (arr->nelts != 0) {
+            /* HTTP_X_FORDWARDED_FOR wasn't just an empty string. */
+
+            char **items;
+            int first = -1;
+            int i;
+
+            items = (char **)arr->elts;
+
+            /*
+             * Work out the position of the IP closest to the start
+             * that we actually trusted.
+             */
+
+            for (i=arr->nelts; i>0; ) {
+                apr_sockaddr_t *sa;
+                apr_status_t rv;
+
+                i--;
+
+                rv = apr_sockaddr_info_get(&sa, items[i], APR_UNSPEC,
+                                           0, 0, r->pool);
+
+                if (rv == APR_SUCCESS) {
+                    if (!wsgi_ip_is_in_array(sa, config->trusted_proxies))
+                        break;
+
+                    first = i;
+                }
+                else {
+                    ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_DEBUG, 0, r,
+                              "mod_wsgi (pid=%d): Forwarded IP of \"%s\" is "
+                              "not a valid IP address.", getpid(), items[i]);
+                    break;
+                }
+            }
+
+            if (first >= 0) {
+                /*
+                 * We found at least one trusted IP. We use the
+                 * IP that may have appeared before that as
+                 * REMOTE_ADDR. We rewrite HTTP_X_FORWARDED_FOR
+                 * to record only from REMOTE_ADDR onwards.
+                 */
+
+                char *list;
+
+                i = first-1;
+                if (i<0)
+                    i = 0;
+
+                apr_table_setn(r->subprocess_env, "REMOTE_ADDR", items[i]);
+
+                list = items[i];
+
+                i++;
+
+                while (arr->nelts != i) {
+                    list = apr_pstrcat(r->pool, list, ", ", items[i], NULL);
+                    i++;
+                }
+
+                apr_table_setn(r->subprocess_env, "HTTP_X_FORWARDED_FOR",
+                               list);
+            }
+            else {
+                /*
+                 * No trusted IP. Use the last for REMOTE_ADDR.
+                 * We rewrite HTTP_X_FORWARDED_FOR to record only
+                 * the last.
+                 */
+
+                apr_table_setn(r->subprocess_env, "REMOTE_ADDR",
+                        items[arr->nelts-1]);
+                apr_table_setn(r->subprocess_env, "HTTP_X_FORWARDED_FOR",
+                        items[arr->nelts-1]);
+            }
+        }
+    }
+    else {
+        /*
+         * We do not need to validate the proxies. We will have a
+         * potentially comma separated list where the client we
+         * are interested in will be listed first.
+         */
+
+        const char *end = NULL;
+
+        /* Skip leading whitespace for item. */
+
+        while (*value != '\0' && apr_isspace(*value))
+            value++;
+
+        if (*value != '\0') {
+            end = value;
+
+            while (*end != '\0' && *end != ',')
+                end++;
+
+            /* Need deal with trailing whitespace. */
+
+            while (end != value) {
+                if (!apr_isspace(*(end-1)))
+                    break;
+
+                end--;
+            }
+
+            /* Override REMOTE_ADDR. Leave HTTP_X_FORWARDED_FOR. */
+
+            apr_table_setn(r->subprocess_env, "REMOTE_ADDR",
+                    apr_pstrndup(r->pool, value, (end-value)));
+        }
+    }
+}
+
+static void wsgi_process_proxy_headers(request_rec *r)
+{
+    WSGIRequestConfig *config = NULL;
+
+    apr_array_header_t *trusted_proxy_headers = NULL;
+
+    int match_client_header = 0;
+    int match_host_header = 0;
+    int match_script_name_header = 0;
+    int match_scheme_header = 0;
+
+    const char *trusted_client_header = NULL;
+    const char *trusted_host_header = NULL;
+    const char *trusted_script_name_header = NULL;
+    const char *trusted_scheme_header = NULL;
+
+    int i = 0;
+
+    int trusted_proxy = 1;
+
+    const char *client_ip = NULL;
+
+    apr_status_t rv;
+
+    config = (WSGIRequestConfig *)ap_get_module_config(r->request_config,
+                                                       &wsgi_module);
+
+    trusted_proxy_headers = config->trusted_proxy_headers;
+
+    /* Nothing to do if no trusted headers have been specified. */
+
+    if (!trusted_proxy_headers)
+        return;
+
+    /*
+     * Check for any special processing required for each trusted
+     * header which has been specified. We should only do this if
+     * there was no list of trusted proxies, or if the client IP
+     * was that of a trusted proxy.
+     */
+
+    if (config->trusted_proxies) {
+        client_ip = apr_table_get(r->subprocess_env, "REMOTE_ADDR");
+
+        if (client_ip) {
+            apr_sockaddr_t *sa;
+
+            rv = apr_sockaddr_info_get(&sa, client_ip, APR_UNSPEC,
+                                       0, 0, r->pool);
+
+            if (rv == APR_SUCCESS) {
+                if (!wsgi_ip_is_in_array(sa, config->trusted_proxies))
+                    trusted_proxy = 0;
+            }
+            else {
+                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                              "mod_wsgi (pid=%d): REMOTE_ADDR of \"%s\" is "
+                              "not a valid IP address.", getpid(), client_ip);
+
+                trusted_proxy = 0;
+            }
+        }
+        else
+            trusted_proxy = 0;
+    }
+
+    if (trusted_proxy) {
+        for (i=0; i<trusted_proxy_headers->nelts; i++) {
+            const char *name = NULL;
+            const char *value = NULL;
+
+            name = ((const char**)trusted_proxy_headers->elts)[i];
+            value = apr_table_get(r->subprocess_env, name);
+
+            if (!strcmp(name, "HTTP_X_FORWARDED_FOR")) {
+                match_client_header = 1;
+
+                if (value) {
+                    wsgi_process_forwarded_for(r, config, value);
+
+                    trusted_client_header = name;
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_CLIENT_IP") ||
+                    !strcmp(name, "HTTP_X_REAL_IP")) {
+
+                match_client_header = 1;
+
+                if (value) {
+                    /* Use the value as is. */
+
+                    apr_table_setn(r->subprocess_env, "REMOTE_ADDR", value);
+
+                    trusted_client_header = name;
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_HOST") ||
+                     !strcmp(name, "HTTP_X_HOST")) {
+
+                match_host_header = 1;
+
+                if (value) {
+                    /* Use the value as is. May include a port. */
+
+                    trusted_host_header = name;
+
+                    apr_table_setn(r->subprocess_env, "HTTP_HOST", value);
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_SERVER")) {
+                if (value) {
+                    /* Use the value as is. */
+
+                    apr_table_setn(r->subprocess_env, "SERVER_NAME", value);
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_PORT")) {
+                if (value) {
+                    /* Use the value as is. */
+
+                    apr_table_setn(r->subprocess_env, "SERVER_PORT", value);
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_SCRIPT_NAME") ||
+                     !strcmp(name, "HTTP_X_FORWARDED_SCRIPT_NAME")) {
+
+                match_script_name_header = 1;
+
+                if (value) {
+                    /*
+                     * Use the value as is. We want to remember what the
+                     * original value for SCRIPT_NAME was though.
+                     */
+
+                    apr_table_setn(r->subprocess_env, "mod_wsgi.mount_point",
+                                   value);
+
+                    trusted_script_name_header = name;
+
+                    apr_table_setn(r->subprocess_env, "SCRIPT_NAME", value);
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_PROTO") ||
+                !strcmp(name, "HTTP_X_FORWARDED_SCHEME") ||
+                !strcmp(name, "HTTP_X_SCHEME")) {
+
+                match_scheme_header = 1;
+
+                if (value) {
+                    trusted_scheme_header = name;
+
+                    /* Value can be either 'http' or 'https'. */
+
+                    if (!strcasecmp(value, "https"))
+                        apr_table_setn(r->subprocess_env, "HTTPS", "1");
+                    else if (!strcasecmp(value, "http"))
+                        apr_table_unset(r->subprocess_env, "HTTPS");
+                }
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_HTTPS") ||
+                     !strcmp(name, "HTTP_X_FORWARDED_SSL") ||
+                     !strcmp(name, "HTTP_X_HTTPS")) {
+
+                match_scheme_header = 1;
+
+                if (value) {
+                    trusted_scheme_header = name;
+
+                    /*
+                     * Value can be a boolean like flag such as 'On',
+                     * 'Off', 'true', 'false', '1' or '0'.
+                     */
+
+                    if (!strcasecmp(value, "On") ||
+                        !strcasecmp(value, "true") ||
+                        !strcasecmp(value, "1")) {
+
+                        apr_table_setn(r->subprocess_env, "HTTPS", "1");
+                    }
+                    else if (!strcasecmp(value, "Off") ||
+                        !strcasecmp(value, "false") ||
+                        !strcasecmp(value, "0")) {
+
+                        apr_table_unset(r->subprocess_env, "HTTPS");
+                    }
+                }
+            }
+        }
+    }
+    else {
+        /*
+         * If it isn't a trusted proxy, we still need to knock
+         * out any headers for categories we were interested in.
+         */
+
+        for (i=0; i<trusted_proxy_headers->nelts; i++) {
+            const char *name = NULL;
+            const char *value = NULL;
+
+            name = ((const char**)trusted_proxy_headers->elts)[i];
+            value = apr_table_get(r->subprocess_env, name);
+
+            if (!strcmp(name, "HTTP_X_FORWARDED_FOR") ||
+                     !strcmp(name, "HTTP_X_REAL_IP")) {
+
+                match_client_header = 1;
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_HOST") ||
+                     !strcmp(name, "HTTP_X_HOST")) {
+
+                match_host_header = 1;
+            }
+            else if (!strcmp(name, "HTTP_X_SCRIPT_NAME") ||
+                     !strcmp(name, "HTTP_X_FORWARDED_SCRIPT_NAME")) {
+
+                match_script_name_header = 1;
+            }
+            else if (!strcmp(name, "HTTP_X_FORWARDED_PROTO") ||
+                !strcmp(name, "HTTP_X_FORWARDED_SCHEME") ||
+                !strcmp(name, "HTTP_X_SCHEME") ||
+                !strcmp(name, "HTTP_X_FORWARDED_HTTPS") ||
+                !strcmp(name, "HTTP_X_FORWARDED_SSL") ||
+                !strcmp(name, "HTTP_X_HTTPS")) {
+
+                match_scheme_header = 1;
+            }
+        }
+    }
+
+    /*
+     * Remove all client IP headers from request environment which
+     * weren't matched as being trusted.
+     */
+
+    if (match_client_header) {
+        const char *name = NULL;
+
+        for (i=0; (name=wsgi_proxy_client_headers[i]); i++) {
+            if (!trusted_client_header || strcmp(name, trusted_client_header)) {
+                apr_table_unset(r->subprocess_env, name);
+            }
+        }
+    }
+
+    /*
+     * Remove all proxy scheme headers from request environment
+     * which weren't matched as being trusted.
+     */
+
+    if (match_scheme_header) {
+        const char *name = NULL;
+
+        for (i=0; (name=wsgi_proxy_scheme_headers[i]); i++) {
+            if (!trusted_scheme_header || strcmp(name, trusted_scheme_header)) {
+                apr_table_unset(r->subprocess_env, name);
+            }
+        }
+    }
+
+    /*
+     * Remove all proxy host from request environment which weren't
+     * matched as being trusted.
+     */
+
+    if (match_host_header) {
+        const char *name = NULL;
+
+        for (i=0; (name=wsgi_proxy_host_headers[i]); i++) {
+            if (!trusted_host_header || strcmp(name, trusted_host_header))
+                apr_table_unset(r->subprocess_env, name);
+        }
+    }
+
+    /*
+     * Remove all proxy script name headers from request environment
+     * which weren't matched as being trusted.
+     */
+
+    if (match_script_name_header) {
+        const char *name = NULL;
+
+        for (i=0; (name=wsgi_proxy_script_name_headers[i]); i++) {
+            if (!trusted_script_name_header ||
+                strcmp(name, trusted_script_name_header)) {
+                apr_table_unset(r->subprocess_env, name);
+            }
         }
     }
 }
@@ -13711,6 +15198,11 @@ static const command_rec wsgi_commands[] =
         NULL, OR_FILEINFO, "Enable/Disable support for chunked requests."),
     AP_INIT_TAKE1("WSGIMapHEADToGET", wsgi_set_map_head_to_get,
         NULL, OR_FILEINFO, "Enable/Disable mapping of HEAD to GET."),
+
+    AP_INIT_RAW_ARGS("WSGITrustedProxyHeaders", wsgi_set_trusted_proxy_headers,
+        NULL, OR_FILEINFO, "Specify a list of trusted proxy headers."),
+    AP_INIT_RAW_ARGS("WSGITrustedProxies", wsgi_set_trusted_proxies,
+        NULL, OR_FILEINFO, "Specify a list of trusted proxies."),
 
 #ifndef WIN32
     AP_INIT_TAKE1("WSGIEnableSendfile", wsgi_set_enable_sendfile,
