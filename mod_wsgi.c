@@ -25,7 +25,7 @@
  *
  *   In Apache 2.X need access to ap_create_request_config().
  *
- *   In Apache 2.X need access to core_module.
+ *   In Apache 2.X need access to core_module and core_request_config.
  *
  */
 
@@ -195,7 +195,7 @@ static apr_status_t apr_os_pipe_put_ex(apr_file_t **file,
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 1
 #define MOD_WSGI_MINORVERSION_NUMBER 0
-#define MOD_WSGI_VERSION_STRING "1.0c2"
+#define MOD_WSGI_VERSION_STRING "1.0c4"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -817,17 +817,19 @@ static LogObject *newLogObject(request_rec *r, int level)
 static void Log_dealloc(LogObject *self)
 {
     if (self->s) {
-        if (self->r) {
-            Py_BEGIN_ALLOW_THREADS
-            ap_log_rerror(APLOG_MARK, WSGI_LOG_LEVEL(self->level),
-                          self->r, "%s", self->s);
-            Py_END_ALLOW_THREADS
-        }
-        else {
-            Py_BEGIN_ALLOW_THREADS
-            ap_log_error(APLOG_MARK, WSGI_LOG_LEVEL(self->level),
-                         wsgi_server, "%s", self->s);
-            Py_END_ALLOW_THREADS
+        if (!self->expired) {
+            if (self->r) {
+                Py_BEGIN_ALLOW_THREADS
+                ap_log_rerror(APLOG_MARK, WSGI_LOG_LEVEL(self->level),
+                              self->r, "%s", self->s);
+                Py_END_ALLOW_THREADS
+            }
+            else {
+                Py_BEGIN_ALLOW_THREADS
+                ap_log_error(APLOG_MARK, WSGI_LOG_LEVEL(self->level),
+                             wsgi_server, "%s", self->s);
+                Py_END_ALLOW_THREADS
+            }
         }
 
         free(self->s);
@@ -3661,10 +3663,12 @@ static int wsgi_execute_script(request_rec *r)
             AdapterObject *adapter = NULL;
             adapter = newAdapterObject(r);
 
-            Py_INCREF(object);
-
             if (adapter) {
+                PyObject *args = NULL;
+
+                Py_INCREF(object);
                 status = Adapter_run(adapter, object);
+                Py_DECREF(object);
 
                 /*
                  * Wipe out references to Apache request object
@@ -3676,6 +3680,21 @@ static int wsgi_execute_script(request_rec *r)
 
                 adapter->r = NULL;
                 adapter->input->r = NULL;
+
+                /*
+		 * Flush any data held within error log object
+		 * and mark it as expired so that it can't be
+		 * used beyond life of the request. We hope that
+		 * this doesn't error, as it will overwrite any
+		 * error from application if it does.
+                 */
+
+                args = PyTuple_New(0);
+                object = Log_flush(adapter->log, args);
+                Py_XDECREF(object);
+                Py_DECREF(args);
+
+                adapter->log->r = NULL;
                 adapter->log->expired = 1;
 
 #if defined(MOD_WSGI_WITH_BUCKETS)
@@ -3684,8 +3703,6 @@ static int wsgi_execute_script(request_rec *r)
             }
 
             Py_XDECREF((PyObject *)adapter);
-
-            Py_DECREF(object);
         }
         else {
             Py_BEGIN_ALLOW_THREADS
@@ -6689,6 +6706,8 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
     apr_bucket *e;
     apr_bucket_brigade *bb;
 
+    core_request_config *req_cfg;
+
     /* Don't do anything if not in daemon process. */
 
     if (!wsgi_daemon_pool)
@@ -6747,12 +6766,22 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
                                               sizeof(WSGIRequestConfig));
     ap_set_module_config(r->request_config, &wsgi_module, (void *)config);
 
-    /*
-     * Stash the socket into the connection core config so
-     * that core input and output filters will work.
-     */
+    /* Grab the socket from the connection core config. */
 
     csd = ap_get_module_config(c->conn_config, &core_module);
+
+    /*
+     * Fake up parts of the internal per request core
+     * configuration. If we don't do this then when Apache is
+     * compiled with the symbol AP_DEBUG, internal checks made
+     * by Apache will result in process crashing.
+     */
+
+    req_cfg = apr_pcalloc(r->pool, sizeof(core_request_config));
+
+    req_cfg->bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+
+    ap_set_module_config(r->request_config, &core_module, req_cfg);
 
     /* Read in the request details and setup request object. */
 
@@ -6868,7 +6897,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
 
     /*
      * Define how input data is to be processed. This
-     * was already down in the Apache child process and
+     * was already done in the Apache child process and
      * so it shouldn't fail. More importantly, it sets
      * up request data tracking how much input has been
      * read or if more remains.
