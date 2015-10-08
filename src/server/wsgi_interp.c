@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------------------- */
 
 /*
- * Copyright 2007-2014 GRAHAM DUMPLETON
+ * Copyright 2007-2015 GRAHAM DUMPLETON
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,12 +42,38 @@
 
 /* Function to restrict access to use of signal(). */
 
-static PyObject *wsgi_signal_intercept(PyObject *self, PyObject *args)
+static void SignalIntercept_dealloc(SignalInterceptObject *self)
+{
+    Py_DECREF(self->wrapped);
+}
+
+static SignalInterceptObject *newSignalInterceptObject(PyObject *wrapped)
+{
+    SignalInterceptObject *self = NULL;
+
+    self = PyObject_New(SignalInterceptObject, &SignalIntercept_Type);
+    if (self == NULL)
+        return NULL;
+
+    Py_INCREF(wrapped);
+    self->wrapped = wrapped;
+
+    return self;
+}
+
+static PyObject *SignalIntercept_call(
+        SignalInterceptObject *self, PyObject *args, PyObject *kwds)
 {
     PyObject *h = NULL;
     int n = 0;
 
     PyObject *m = NULL;
+
+    if (wsgi_daemon_pid != 0 && wsgi_daemon_pid != getpid())
+        return PyObject_Call(self->wrapped, args, kwds);
+
+    if (wsgi_worker_pid != 0 && wsgi_worker_pid != getpid())
+        return PyObject_Call(self->wrapped, args, kwds);
 
     if (!PyArg_ParseTuple(args, "iO:signal", &n, &h))
         return NULL;
@@ -87,9 +113,48 @@ static PyObject *wsgi_signal_intercept(PyObject *self, PyObject *args)
     return h;
 }
 
-static PyMethodDef wsgi_signal_method[] = {
-    { "signal", (PyCFunction)wsgi_signal_intercept, METH_VARARGS, 0 },
-    { NULL, NULL }
+PyTypeObject SignalIntercept_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "mod_wsgi.SignalIntercept",  /*tp_name*/
+    sizeof(SignalInterceptObject), /*tp_basicsize*/
+    0,                      /*tp_itemsize*/
+    /* methods */
+    (destructor)SignalIntercept_dealloc, /*tp_dealloc*/
+    0,                      /*tp_print*/
+    0,                      /*tp_getattr*/
+    0,                      /*tp_setattr*/
+    0,                      /*tp_compare*/
+    0,                      /*tp_repr*/
+    0,                      /*tp_as_number*/
+    0,                      /*tp_as_sequence*/
+    0,                      /*tp_as_mapping*/
+    0,                      /*tp_hash*/
+    (ternaryfunc)SignalIntercept_call, /*tp_call*/
+    0,                      /*tp_str*/
+    0,                      /*tp_getattro*/
+    0,                      /*tp_setattro*/
+    0,                      /*tp_as_buffer*/
+    Py_TPFLAGS_DEFAULT,     /*tp_flags*/
+    0,                      /*tp_doc*/
+    0,                      /*tp_traverse*/
+    0,                      /*tp_clear*/
+    0,                      /*tp_richcompare*/
+    0,                      /*tp_weaklistoffset*/
+    0,                      /*tp_iter*/
+    0,                      /*tp_iternext*/
+    0,                      /*tp_methods*/
+    0,                      /*tp_members*/
+    0,                      /*tp_getset*/
+    0,                      /*tp_base*/
+    0,                      /*tp_dict*/
+    0,                      /*tp_descr_get*/
+    0,                      /*tp_descr_set*/
+    0,                      /*tp_dictoffset*/
+    0,                      /*tp_init*/
+    0,                      /*tp_alloc*/
+    0,                      /*tp_new*/
+    0,                      /*tp_free*/
+    0,                      /*tp_is_gc*/
 };
 
 /* Wrapper around Python interpreter instances. */
@@ -504,10 +569,26 @@ InterpreterObject *newInterpreterObject(const char *name)
      */
 
     if (wsgi_server_config->restrict_signal != 0) {
+
         module = PyImport_ImportModule("signal");
-        PyModule_AddObject(module, "signal", PyCFunction_New(
-                           &wsgi_signal_method[0], NULL));
-        Py_DECREF(module);
+
+        if (module) {
+            PyObject *dict = NULL;
+            PyObject *func = NULL;
+
+            dict = PyModule_GetDict(module);
+            func = PyDict_GetItemString(dict, "signal");
+
+            if (func) {
+                PyObject *wrapper = NULL;
+
+                wrapper = (PyObject *)newSignalInterceptObject(func);
+                PyDict_SetItemString(dict, "signal", wrapper);
+                Py_DECREF(wrapper);
+            }
+        }
+
+        Py_XDECREF(module);
     }
 
     /*
@@ -717,10 +798,11 @@ InterpreterObject *newInterpreterObject(const char *name)
     if (!wsgi_daemon_pool)
         wsgi_python_path = wsgi_server_config->python_path;
 
-    if (wsgi_python_path) {
+    module = PyImport_ImportModule("site");
+
+    if (wsgi_python_path && *wsgi_python_path) {
         PyObject *path = NULL;
 
-        module = PyImport_ImportModule("site");
         path = PySys_GetObject("path");
 
         if (module && path) {
@@ -901,8 +983,6 @@ InterpreterObject *newInterpreterObject(const char *name)
                 Py_END_ALLOW_THREADS
             }
         }
-
-        Py_XDECREF(module);
     }
 
     /*
@@ -932,10 +1012,10 @@ InterpreterObject *newInterpreterObject(const char *name)
             PyList_Insert(path, 0, item);
             Py_DECREF(item);
         }
-
-        Py_XDECREF(module);
     }
 #endif
+
+    Py_XDECREF(module);
 
     /*
      * Create 'mod_wsgi' Python module. We first try and import an
@@ -1935,6 +2015,8 @@ void wsgi_python_init(apr_pool_t *p)
 {
     const char *python_home = 0;
 
+    int is_pyvenv = 0;
+
     /* Perform initialisation if required. */
 
     if (!Py_IsInitialized()) {
@@ -2003,19 +2085,16 @@ void wsgi_python_init(apr_pool_t *p)
 
         python_home = wsgi_server_config->python_home;
 
-#if defined(MOD_WSGI_WITH_DAEMONS)
-        if (wsgi_daemon_process && wsgi_daemon_process->group->python_home)
-            python_home = wsgi_daemon_process->group->python_home;
-#endif
-
-#if PY_MAJOR_VERSION >= 3
         if (python_home) {
-            wchar_t *s = NULL;
-            int len = strlen(python_home)+1;
-
             ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
                          "mod_wsgi (pid=%d): Python home %s.", getpid(),
                          python_home);
+        }
+
+        if (python_home) {
+#if PY_MAJOR_VERSION >= 3
+            wchar_t *s = NULL;
+            int len = strlen(python_home)+1;
 
             s = (wchar_t *)apr_palloc(p, len*sizeof(wchar_t));
 
@@ -2025,23 +2104,21 @@ void wsgi_python_init(apr_pool_t *p)
             mbstowcs(s, python_home, len);
 #endif
             Py_SetPythonHome(s);
-        }
 #else
-        if (python_home) {
-            ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
-                         "mod_wsgi (pid=%d): Python home %s.", getpid(),
-                         python_home);
-
             Py_SetPythonHome((char *)python_home);
-        }
 #endif
+        }
+
 #else
         /*
-         * Check for Python HOME being overridden. What we are actually
-         * going to do though is work out where the Python executable
-         * would be that the designated installation and set the
-         * location for where it is. This avoids bugs in pyvenv support
-         * for embedded systems.
+         * Now for the UNIX version of the code to set the Python HOME.
+         * For this things are a mess. If using pyvenv with Python 3.3+
+         * then setting Python HOME doesn't work. For it we need to use
+         * Python executable location. Everything else seems to be cool
+         * with setting Python HOME. We therefore need to detect when we
+         * have a pyvenv by looking for the presence of pyvenv.cfg file.
+         * We can simply just set Python executable everywhere as that
+         * doesn't work with brew Python on MacOS X.
          */
 
         python_home = wsgi_server_config->python_home;
@@ -2051,42 +2128,98 @@ void wsgi_python_init(apr_pool_t *p)
             python_home = wsgi_daemon_process->group->python_home;
 #endif
 
-#if PY_MAJOR_VERSION >= 3
         if (python_home) {
+            apr_status_t rv;
+            apr_finfo_t finfo; 
+
+            char *pyvenv_cfg;
+
             const char *python_exe = 0;
+
+#if PY_MAJOR_VERSION >= 3
             wchar_t *s = NULL;
             int len = 0;
+#endif
 
-            python_exe = apr_pstrcat(p, python_home, "/bin/python", NULL);
-
-            len = strlen(python_exe)+1;
+            /*
+             * Is common to see people set the directory to an incorrect
+             * location, including to a location within an inaccessible
+             * user home directory, or to the 'python' executable itself.
+             * Try and validate that the location is accessible and is a
+             * directory.
+             */
 
             ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
                          "mod_wsgi (pid=%d): Python home %s.", getpid(),
                          python_home);
 
-            s = (wchar_t *)apr_palloc(p, len*sizeof(wchar_t));
+            rv = apr_stat(&finfo, python_home, APR_FINFO_NORM, p);
 
-#if defined(WIN32) && defined(APR_HAS_UNICODE_FS)
-            wsgi_utf8_to_unicode_path(s, len, python_exe);
+            if (rv != APR_SUCCESS) {
+                ap_log_error(APLOG_MARK, APLOG_WARNING, rv, wsgi_server,
+                             "mod_wsgi (pid=%d): Unable to stat Python home "
+                             "%s. Python interpreter may not be able to be "
+                             "initialized correctly. Verify the supplied path "
+                             "and access permissions for whole of the path.",
+                             getpid(), python_home);
+            }
+            else {
+                if (finfo.filetype != APR_DIR) {
+                    ap_log_error(APLOG_MARK, APLOG_WARNING, rv, wsgi_server,
+                                 "mod_wsgi (pid=%d): Python home %s is not "
+                                 "a directory. Python interpreter may not "
+                                 "be able to be initialized correctly. "
+                                 "Verify the supplied path.", getpid(),
+                                 python_home);
+                }
+                else if (access(python_home, X_OK) == -1) {
+                    ap_log_error(APLOG_MARK, APLOG_WARNING, rv, wsgi_server,
+                                 "mod_wsgi (pid=%d): Python home %s is not "
+                                 "accessible. Python interpreter may not "
+                                 "be able to be initialized correctly. "
+                                 "Verify the supplied path and access "
+                                 "permissions on the directory.", getpid(),
+                                 python_home);
+                }
+            }
+
+            /* Now detect whether have a pyvenv with Python 3.3+. */
+
+            pyvenv_cfg = apr_pstrcat(p, python_home, "/pyvenv.cfg", NULL);
+
+            if (access(pyvenv_cfg, R_OK) == 0)
+                is_pyvenv = 1;
+
+            if (is_pyvenv) {
+                /*
+                 * Embedded support for pyvenv is broken so need to
+                 * set Python executable location and cannot set the
+                 * Python HOME as is more desirable.
+                 */
+
+                python_exe = apr_pstrcat(p, python_home, "/bin/python", NULL);
+#if PY_MAJOR_VERSION >= 3
+                len = strlen(python_exe)+1;
+                s = (wchar_t *)apr_palloc(p, len*sizeof(wchar_t));
+                mbstowcs(s, python_exe, len);
+
+                Py_SetProgramName(s);
 #else
-            mbstowcs(s, python_exe, len);
+                Py_SetProgramName((char *)python_exe);
 #endif
-            Py_SetProgramName(s);
-        }
+            }
+            else {
+#if PY_MAJOR_VERSION >= 3
+                len = strlen(python_home)+1;
+                s = (wchar_t *)apr_palloc(p, len*sizeof(wchar_t));
+                mbstowcs(s, python_home, len);
+
+                Py_SetPythonHome(s);
 #else
-        if (python_home) {
-            const char *python_exe = 0;
-
-            python_exe = apr_pstrcat(p, python_home, "/bin/python", NULL);
-
-            ap_log_error(APLOG_MARK, APLOG_INFO, 0, wsgi_server,
-                         "mod_wsgi (pid=%d): Python home %s.", getpid(),
-                         python_home);
-
-            Py_SetProgramName((char *)python_exe);
-        }
+                Py_SetPythonHome((char *)python_home);
 #endif
+            }
+        }
 #endif
 
         /*
