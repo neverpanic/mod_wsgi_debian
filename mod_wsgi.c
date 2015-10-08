@@ -245,8 +245,8 @@ static char *apr_off_t_toa(apr_pool_t *p, apr_off_t n)
 /* Version and module information. */
 
 #define MOD_WSGI_MAJORVERSION_NUMBER 2
-#define MOD_WSGI_MINORVERSION_NUMBER 4
-#define MOD_WSGI_VERSION_STRING "2.4"
+#define MOD_WSGI_MINORVERSION_NUMBER 5
+#define MOD_WSGI_VERSION_STRING "2.5"
 
 #if AP_SERVER_MAJORVERSION_NUMBER < 2
 module MODULE_VAR_EXPORT wsgi_module;
@@ -1267,12 +1267,6 @@ static PyObject *Log_closed(LogObject *self, void *closure)
     return Py_False;
 }
 
-static PyObject *Log_isatty(LogObject *self, void *closure)
-{
-    Py_INCREF(Py_False);
-    return Py_False;
-}
-
 static PyMethodDef Log_methods[] = {
     { "close",      (PyCFunction)Log_close,      METH_VARARGS, 0 },
     { "flush",      (PyCFunction)Log_flush,      METH_VARARGS, 0 },
@@ -1283,7 +1277,6 @@ static PyMethodDef Log_methods[] = {
 
 static PyGetSetDef Log_getset[] = {
     { "closed", (getter)Log_closed, NULL, 0 },
-    { "isatty", (getter)Log_isatty, NULL, 0 },
     { NULL },
 };
 
