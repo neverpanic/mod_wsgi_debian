@@ -1,12 +1,22 @@
-Description: Query pythonX.Y-config instead of python-distutils to fix building
+From 7f6078d0b821e3a594e23740bd095d290494dc3a Mon Sep 17 00:00:00 2001
+From: Dmitrijs Ledkovs <dmitrijs.ledkovs@canonical.com>
+Date: Thu, 8 Oct 2015 09:53:53 -0700
+Subject: Query pythonX.Y-config instead of python-distutils to fix building
+
  against python3.3.
-Author: Dmitrijs Ledkovs <dmitrijs.ledkovs@canonical.com>
 Author: Felix Geyer <fgeyer@debian.org>
 Bug-Debian: http://bugs.debian.org/692390
 
+Patch-Name: python-config.patch
+---
+ configure.ac | 55 ++++++-------------------------------------------------
+ 1 file changed, 6 insertions(+), 49 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index ab6145d..9e2a9c2 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -103,14 +103,8 @@
+@@ -112,14 +112,8 @@ if test x"${PYTHON_LDVERSION}" = x""; then
      PYTHON_LDVERSION=${PYTHON_VERSION}
  fi
  
@@ -23,7 +33,7 @@ Bug-Debian: http://bugs.debian.org/692390
  
  if test "${ENABLE_EMBEDDED}" != "yes"; then
  CPPFLAGS3="-DMOD_WSGI_DISABLE_EMBEDDED"
-@@ -143,45 +137,8 @@
+@@ -152,45 +146,8 @@ if test "${PYTHON_LDVERSION}" != "${PYTHON_VERSION}"; then
      PYTHONCFGDIR="${PYTHONCFGDIR}-${PYTHON_LDVERSION}"
  fi
  
@@ -71,7 +81,7 @@ Bug-Debian: http://bugs.debian.org/692390
  
  CFLAGS1=""
  for arg in ${CFLAGS}
-@@ -200,8 +157,8 @@
+@@ -209,8 +166,8 @@ if test -x /usr/bin/lipo; then
  fi
  
  CFLAGS="${CFLAGS1} ${CFLAGS2}"
