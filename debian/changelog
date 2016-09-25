@@ -1,8 +1,18 @@
-mod-wsgi (4.4.13-1) UNRELEASED; urgency=medium
+mod-wsgi (4.5.7-1~1.gbp8013cf) UNRELEASED; urgency=medium
 
+  ** SNAPSHOT build @8013cf8e8c92bc69060dbd6a3d7bc8ec48f6c19b **
+
+  [ Ondřej Nový ]
   * Fixed VCS URL (https)
 
- -- Ondřej Nový <novy@ondrej.org>  Tue, 29 Mar 2016 21:43:35 +0200
+  [ Bernd Zeimetz ]
+  * [4b3b7b8] Merge tag 'upstream/4.4.21'
+    Upstream version 4.4.21
+  * [8c2e3d6] Merge remote-tracking branch 'origin/master'
+  * [8013cf8] Merge tag 'upstream/4.5.7'
+    Upstream version 4.5.7
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sun, 25 Sep 2016 12:11:03 +0200
 
 mod-wsgi (4.4.13-0.1) experimental; urgency=medium
 
