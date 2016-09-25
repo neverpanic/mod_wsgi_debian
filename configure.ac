@@ -112,8 +112,14 @@ if test x"${PYTHON_LDVERSION}" = x""; then
     PYTHON_LDVERSION=${PYTHON_VERSION}
 fi
 
-CPPFLAGS1=`${PYTHON}-config --includes`
-[CPPFLAGS2=`${PYTHON}-config --cflags | sed 's|^-[^D][^ ]*||g; s| -[^D][^ ]*||g; s|^ ||; s| *$||g'`]
+CPPFLAGS1=`${PYTHON} -c 'from sys import stdout; \
+    from distutils import sysconfig; \
+    stdout.write("-I" + sysconfig.get_config_var("INCLUDEPY"))'`
+
+CPPFLAGS2=`${PYTHON} -c 'from sys import stdout; \
+    from distutils import sysconfig; \
+    stdout.write(" ".join(filter(lambda x: x.startswith("-D"), \
+    sysconfig.get_config_var("CFLAGS").split())))'`
 
 if test "${ENABLE_EMBEDDED}" != "yes"; then
 CPPFLAGS3="-DMOD_WSGI_DISABLE_EMBEDDED"
@@ -146,8 +152,45 @@ if test "${PYTHON_LDVERSION}" != "${PYTHON_VERSION}"; then
     PYTHONCFGDIR="${PYTHONCFGDIR}-${PYTHON_LDVERSION}"
 fi
 
-[LDFLAGS1=`${PYTHON}-config --ldflags | sed 's|^-L[^ ]*||g; s| -L[^ ]*||g; s|^ ||; s| *$||g'`]
-[LDLIBS1=`${PYTHON}-config --ldflags | sed 's|^-l[^ ]*||g; s| -l[^ ]*||g; s|^ ||; s| *$||g'`]
+if test "${PYTHONFRAMEWORKDIR}" = "no-framework" -o \
+        "${ENABLE_FRAMEWORK}" != "yes"; then
+    LDFLAGS1="-L${PYTHONLIBDIR}"
+    LDFLAGS2="-L${PYTHONCFGDIR}"
+
+    LDLIBS1="-lpython${PYTHON_LDVERSION}"
+
+    # MacOS X seems to be broken and doesn't use ABIFLAGS suffix
+    # so add a check to try and work out what we need to do.
+
+    if test -f "${PYTHONLIBDIR}/libpython${PYTHON_VERSION}.a"; then
+        LDLIBS1="-lpython${PYTHON_VERSION}"
+    fi
+
+    if test -f "${PYTHONCFGDIR}/libpython${PYTHON_VERSION}.a"; then
+        LDLIBS1="-lpython${PYTHON_VERSION}"
+    fi
+
+    LDLIBS2=`${PYTHON} -c 'from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var("LIBS"))'`
+    LDLIBS3=`${PYTHON} -c 'from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var("SYSLIBS"))'`
+else
+    LDFLAGS1="-Wl,-F${PYTHONFRAMEWORKPREFIX} -framework ${PYTHONFRAMEWORK}"
+
+    VERSION="${PYTHON_VERSION}"
+    STRING="${PYTHONFRAMEWORKDIR}/Versions/${VERSION}/${PYTHONFRAMEWORK}"
+    LDFLAGS2=`${PYTHON} -c "from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var(
+        \"LINKFORSHARED\").replace(\"${STRING}\", ''))" | \
+        sed -e 's/-Wl,-stack_size,[[0-9]]*//'`
+
+    LDLIBS1=`${PYTHON} -c 'from sys import stdout; \
+        from distutils import sysconfig; \
+        stdout.write(sysconfig.get_config_var("LIBS"))'`
+fi
 
 CFLAGS1=""
 for arg in ${CFLAGS}
@@ -166,8 +209,8 @@ if test -x /usr/bin/lipo; then
 fi
 
 CFLAGS="${CFLAGS1} ${CFLAGS2}"
-LDFLAGS="${LDFLAGS} ${LDFLAGS1} ${LDFLAGS3}"
-LDLIBS="${LDLIBS} ${LDLIBS1}"
+LDFLAGS="${LDFLAGS} ${LDFLAGS1} ${LDFLAGS2} ${LDFLAGS3}"
+LDLIBS="${LDLIBS} ${LDLIBS1} ${LDLIBS2} ${LDLIBS3}"
 
 AC_SUBST(CFLAGS)
 AC_SUBST(LDFLAGS)
