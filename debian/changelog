@@ -1,3 +1,10 @@
+mod-wsgi (4.5.9-1) unstable; urgency=medium
+
+  * [ac3148d] Merge tag 'upstream/4.5.9'
+    Upstream version 4.5.9
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 03 Dec 2016 19:29:05 +0100
+
 mod-wsgi (4.5.7-1) unstable; urgency=medium
 
   [ SVN-Git Migration ]
