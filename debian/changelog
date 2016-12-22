@@ -1,3 +1,10 @@
+mod-wsgi (4.5.11-1) unstable; urgency=medium
+
+  * [b089617] Merge tag 'upstream/4.5.11'
+    Upstream version 4.5.11
+
+ -- Clemens Lang <cal@macports.org>  Thu, 22 Dec 2016 19:04:15 +0100
+
 mod-wsgi (4.5.9-1) unstable; urgency=medium
 
   * [ac3148d] Merge tag 'upstream/4.5.9'
